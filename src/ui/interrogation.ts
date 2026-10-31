@@ -12,14 +12,14 @@ export class InterrogationRoom {
 
   render() {
     const g = this.game;
-    const unlocked = g.def.contacts.filter((c) => g.contactUnlocked(c));
-    const locked = g.def.contacts.length - unlocked.length;
+    const unlocked = g.def.contacts.filter((c) => g.contactVisible(c));
+    const locked = g.def.contacts.filter((c) => (c.fromChapter ?? 0) <= g.chapterIdx && (c.untilChapter === undefined || g.chapterIdx <= c.untilChapter)).length - unlocked.length;
     if (!this.selected || !unlocked.some((c) => c.id === this.selected)) { this.selected = unlocked[0]?.id ?? null; this.mode = null; }
     const list = h('aside', { class: 'talk-list' },
       h('h3', {}, 'Kontakte'),
       ...unlocked.map((c, i) => {
         const unit = g.unitAtPlace(c);
-        const open = c.questions.filter((q) => !g.asked.has(c.id + '.' + q.id)).length;
+        const open = g.visibleQuestions(c).filter((q) => !g.isAsked(c, q.id)).length;
         return h('button', { class: 'contact' + (c.id === this.selected ? ' active' : ''), onclick: () => { this.selected = c.id; this.mode = g.callIsActive(c) ? 'phone' : null; this.render(); } },
           h('div', { html: portrait(c.hue, 40, i + 3) }),
           h('div', { class: 'grow' }, h('b', {}, c.name), h('small', {}, c.role)),
@@ -39,8 +39,8 @@ export class InterrogationRoom {
     const callOpen = g.callIsActive(c);
     if (this.mode === 'person' && !unit) this.mode = null;
     if (this.mode === 'phone' && !callOpen) this.mode = null;
-    const transcript = [...g.asked].filter((k) => k.startsWith(c.id + '.')).map((k) => c.questions.find((q) => q.id === k.slice(c.id.length + 1))!);
-    const qs = c.questions.filter((q) => !g.asked.has(c.id + '.' + q.id));
+    const transcript = g.asked.filter((k) => k.startsWith(c.id + '.')).map((k) => c.questions.find((q) => q.id === k.slice(c.id.length + 1))!).filter(Boolean);
+    const qs = g.visibleQuestions(c).filter((q) => !g.isAsked(c, q.id));
     const canAct = g.phase === 'detective';
     return h('div', { class: 'talk-main' },
       h('div', { class: 'talk-head' },
@@ -48,7 +48,7 @@ export class InterrogationRoom {
         h('div', { class: 'grow' },
           h('h2', {}, c.name), h('div', { class: 'role' }, c.role),
           h('div', { class: 'loc' }, '📍 ' + place.name, ' ', h('button', { class: 'link', onclick: () => this.onShowOnMap(c.place) }, 'auf Karte zeigen')),
-          h('div', { class: 'loc ' + (unit ? 'ok' : 'warn') }, unit ? `🚓 ${unit.name} ist vor Ort` : '🚓 Keine Einheit vor Ort. Für eine persönliche Befragung muss eine Einheit dorthin fahren.'),
+          h('div', { class: 'loc ' + (unit ? 'ok' : 'warn') }, c.custody ? '🔒 In Gewahrsam: Sie können die Person direkt im Verhörraum befragen.' : unit ? `🚓 ${unit.name} ist vor Ort` : '🚓 Keine Einheit vor Ort. Für eine persönliche Befragung muss eine Einheit dorthin fahren.'),
         ),
       ),
       h('div', { class: 'row modes' },

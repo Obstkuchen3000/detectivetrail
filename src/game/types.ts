@@ -35,6 +35,9 @@ export interface Trace {
   y: number;
   r?: number;
   text: string;
+  tag?: string;
+  node?: number;
+  route?: string;
 }
 
 export type AnnoType = 'pin' | 'person' | 'circle' | 'line' | 'note';

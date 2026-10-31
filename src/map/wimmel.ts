@@ -29,6 +29,37 @@ export class Wimmel {
     }
   }
   static cellSize = CELL;
+  private lotCache = new Map<string, Path2D>();
+
+  /** Parzellenlinien (Häuserfronten + Grundstücksgrenzen) entlang der Straßen einer Zelle */
+  lots(cx: number, cy: number): Path2D | null {
+    const key = cx + ',' + cy;
+    if (this.lotCache.has(key)) return this.lotCache.get(key)!;
+    const segs = this.segs.get(key);
+    if (!segs) { this.lotCache.set(key, null as unknown as Path2D); return null; }
+    const p = new Path2D();
+    const rnd = mulberry32(hash2(cx, cy, 11));
+    for (let i = 0; i < segs.length; i += 5) {
+      const [x1, y1, x2, y2, c] = segs.slice(i, i + 5);
+      if (c === 2) continue;
+      const L = Math.hypot(x2 - x1, y2 - y1); if (L < 8) continue;
+      const ux = (x2 - x1) / L, uy = (y2 - y1) / L, nx = -uy, ny = ux;
+      const half = c === 1 ? 8 : 5.5;
+      for (const side of [-1, 1]) {
+        const o = side * (half + 2.5);
+        // Häuserfront
+        p.moveTo(x1 + ux * 6 + nx * o, y1 + uy * 6 + ny * o); p.lineTo(x2 - ux * 6 + nx * o, y2 - uy * 6 + ny * o);
+        // Grundstücksgrenzen
+        for (let t = 6 + rnd() * 10; t < L - 6; t += 7 + rnd() * 16) {
+          const depth = 14 + rnd() * 18;
+          const bx = x1 + ux * t + nx * o, by = y1 + uy * t + ny * o;
+          p.moveTo(bx, by); p.lineTo(bx + nx * side * depth, by + ny * side * depth);
+        }
+      }
+    }
+    this.lotCache.set(key, p);
+    return p;
+  }
 
   get(cx: number, cy: number): Fig[] {
     const key = cx + ',' + cy;

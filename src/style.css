@@ -115,7 +115,7 @@ main { flex: 1; position: relative; min-height: 0; }
 .view-board { display: none; }
 .view-board.active { display: flex; }
 .board-wrap { flex: 1; overflow: auto; background: #3b2a1a; }
-.board { position: relative; width: 2140px; height: 1700px;
+.board { position: relative; width: 2620px; height: 2330px;
   background-color: #b08452;
   background-image: radial-gradient(rgba(60,35,10,.35) 1px, transparent 1.5px), radial-gradient(rgba(255,230,190,.18) 1px, transparent 1.5px);
   background-size: 7px 7px, 11px 11px; background-position: 0 0, 3px 5px; box-shadow: inset 0 0 120px rgba(40,20,0,.6); }
@@ -213,3 +213,35 @@ main { flex: 1; position: relative; min-height: 0; }
   .brand small { display: none; }
 }
 .toolbar:empty { display: none; }
+
+/* --- Erweiterungen: Akte, Schnellspiel, Spielstände --- */
+.btn .sub { display: block; font-size: 10px; color: var(--dim); margin-top: 3px; letter-spacing: 0; }
+.btn.big.ghost { background: transparent; }
+.grid.three { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+.tile-teaser { color: var(--ink); font-size: 12px; line-height: 1.5; margin: 10px 0; }
+.acts { display: flex; flex-direction: column; gap: 3px; font-size: 11px; color: var(--amber); }
+.quick { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; text-align: left; width: min(520px, 100%); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 16px; }
+.quick label { font-size: 10px; letter-spacing: .18em; text-transform: uppercase; color: var(--dim); margin-top: 6px; }
+.chip.on { background: var(--cyan); color: #04121f; border-color: var(--cyan); }
+.seed { font-size: 16px; color: var(--amber); padding: 4px 10px; border: 1px dashed var(--line); border-radius: 4px; }
+.saves { width: min(640px, 100%); display: flex; flex-direction: column; gap: 6px; }
+.save-row { display: flex; gap: 10px; align-items: center; text-align: left; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; }
+.save-row b { display: block; } .save-row small { font-size: 11px; }
+.objective-panel { border-color: #3b5f86; }
+.objective-panel p { margin: 4px 0; line-height: 1.45; font-size: 12px; }
+.warnline { color: #fda4af; }
+.objective-line { font-weight: bold; border-top: 1px dashed #8a7a60; padding-top: 10px; }
+.handover.intro { background: rgba(2,6,12,.88); overflow: auto; }
+.handover.intro .dossier { max-height: 90vh; overflow: auto; }
+.endcard { max-width: 640px !important; }
+.epilogue { text-align: left; border-top: 1px solid var(--line); padding-top: 8px; }
+.epilogue h4 { margin: 4px 0; color: var(--amber); letter-spacing: .15em; text-transform: uppercase; font-size: 11px; }
+.epilogue p { font-size: 12px; margin: 6px 0; }
+.row.wrap { flex-wrap: wrap; }
+.reveal-bar { pointer-events: auto; position: absolute; top: 60px; left: 50%; transform: translateX(-50%); background: var(--panel); border: 1px solid #fb923c; border-radius: 6px; padding: 8px 12px; display: flex; gap: 10px; align-items: center; }
+.icon-btn.x { color: #fca5a5; }
+.suspect.other { opacity: .55; }
+.suspect small { display: block; }
+.board-side .objective { background: #0b2034; border: 1px solid var(--line); border-radius: 5px; padding: 8px; margin-bottom: 10px; }
+.board-side .objective b { display: block; color: var(--amber); margin-bottom: 4px; }
+.board-side .objective small { line-height: 1.4; display: block; }

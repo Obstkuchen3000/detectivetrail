@@ -81,6 +81,7 @@ export class Pinboard {
       el.style.left = bc.x + 'px'; el.style.top = bc.y + 'px';
       el.classList.toggle('new', bc.isNew);
       const sid = id.startsWith('dossier_') ? id.slice(8) : null;
+      if (!g.board.has(id)) continue;
       const stamp = el.querySelector('.stamp')!;
       stamp.textContent = sid && g.cleared.has(sid) ? 'ENTLASTET' : sid && g.warrant === sid ? 'HAFTBEFEHL' : sid && g.marked.has(sid) ? 'VERDÄCHTIG' : bc.isNew ? 'NEU' : '';
       stamp.className = 'stamp ' + (sid && g.cleared.has(sid) ? 'cleared' : sid && g.warrant === sid ? 'warrant' : sid && g.marked.has(sid) ? 'marked' : bc.isNew ? 'isnew' : '');
@@ -112,7 +113,7 @@ export class Pinboard {
     el.addEventListener('pointermove', (e) => {
       if (!start) return;
       const c = this.game.board.get(id)!;
-      c.x = Math.max(0, Math.min(1900, start.cx + e.clientX - start.x)); c.y = Math.max(0, Math.min(1500, start.cy + e.clientY - start.y));
+      c.x = Math.max(0, Math.min(2400, start.cx + e.clientX - start.x)); c.y = Math.max(0, Math.min(2100, start.cy + e.clientY - start.y));
       el.style.left = c.x + 'px'; el.style.top = c.y + 'px';
       this.drawThreads();
     });
@@ -125,22 +126,26 @@ export class Pinboard {
     fill(this.side, 
       h('h3', {}, 'Verdächtige'),
       h('p', { class: 'hint' }, 'Klicken Sie auf die Nadel einer Karte und dann auf die Nadel einer zweiten Karte, um sie mit einem roten Faden zu verbinden. Gehören die Hinweise zusammen, entsteht eine neue Erkenntnis.'),
-      ...g.def.suspects.map((s, i) => {
+      h('div', { class: 'objective' }, h('b', {}, `Akt ${g.chapterIdx + 1}: ${g.chapter.title}`), h('small', {}, g.chapter.objective)),
+      ...g.def.suspects.filter((s) => (s.chapter ?? 0) <= g.chapterIdx).sort((a, b) => +g.chapter.candidates.includes(b.id) - +g.chapter.candidates.includes(a.id)).map((s) => {
+        const i = g.def.suspects.indexOf(s);
+        const cand = g.chapter.candidates.includes(s.id);
         const cleared = g.cleared.has(s.id), marked = g.marked.has(s.id), w = g.warrant === s.id;
-        return h('div', { class: 'suspect' + (cleared ? ' cleared' : '') + (marked ? ' marked' : '') + (w ? ' warrant' : '') },
+        return h('div', { class: 'suspect' + (cleared ? ' cleared' : '') + (marked ? ' marked' : '') + (w ? ' warrant' : '') + (cand ? '' : ' other') },
           h('div', { html: portrait(s.hue, 40, i) }),
-          h('div', { class: 'grow' }, h('b', {}, s.name), h('small', {}, `${s.height} · Gr. ${s.shoe} · ${s.smoker}`)),
-          h('button', { class: 'icon-btn', title: 'Als verdächtig markieren', onclick: () => g.toggleMark(s.id) }, marked ? '★' : '☆'),
+          h('div', { class: 'grow' }, h('b', {}, s.name), h('small', {}, `${s.height} · Gr. ${s.shoe} · ${s.smoker}`), s.extra ? h('small', {}, s.extra) : null),
+          cand ? h('button', { class: 'icon-btn', title: 'Als verdächtig markieren', onclick: () => g.toggleMark(s.id) }, marked ? '★' : '☆') : null,
+          cand ? h('button', { class: 'icon-btn x', title: 'Ausschließen / wieder aufnehmen', onclick: () => g.toggleCleared(s.id) }, '✗') : null,
         );
       }),
       h('div', { class: 'warrant-box' },
         g.warrant
-          ? h('div', { class: 'ok' }, '⚖️ Haftbefehl gegen ' + g.def.suspects.find((s) => s.id === g.warrant)!.name + ' liegt vor. Schicken Sie eine Einheit zu seinem Standort!')
+          ? h('div', { class: 'ok' }, '⚖️ Haftbefehl gegen ' + g.def.suspects.find((s) => s.id === g.warrant)!.name + ' liegt vor. Stellen Sie die Person mit einer Einheit!')
           : h('div', {},
             h('label', {}, 'Haftbefehl beantragen'),
             (() => {
-              const sel = h('select', { class: 'txt' }, h('option', { value: '' }, 'Verdächtigen wählen…'), ...g.def.suspects.filter((s) => !g.cleared.has(s.id)).map((s) => h('option', { value: s.id }, s.name))) as HTMLSelectElement;
-              const btn = h('button', { class: 'btn danger', onclick: () => { if (!sel.value) return; if (confirm('Haftbefehl gegen ' + sel.selectedOptions[0].text + ' beantragen? Wenn die Beweise nicht reichen, verlieren Sie 2 Runden.')) g.requestWarrant(sel.value); } }, 'Beantragen');
+              const sel = h('select', { class: 'txt' }, h('option', { value: '' }, 'Verdächtigen wählen…'), ...g.warrantCandidates().map((s) => h('option', { value: s.id }, s.name))) as HTMLSelectElement;
+              const btn = h('button', { class: 'btn danger', onclick: () => { if (!sel.value) return; if (g.phase !== 'detective') { toast('Haftbefehle können Sie nur in Ihrem Zug beantragen.', 'info'); return; } if (confirm('Haftbefehl gegen ' + sel.selectedOptions[0].text + ' beantragen? Wenn die Beweise nicht reichen, verlieren Sie 2 Runden.')) g.requestWarrant(sel.value); } }, 'Beantragen');
               return h('div', { class: 'row' }, sel, btn);
             })(),
             h('small', { class: 'hint' }, 'Erst mit Haftbefehl darf eine Einheit festnehmen. Bei einem falschen Antrag verlieren Sie 2 Runden.'),

@@ -8,7 +8,9 @@ export interface Suspect {
   smoker: string;
   notes: string;
   hue: number;
-  culprit?: boolean;
+  /** ab welchem Akt (0-basiert) das Dossier an der Pinnwand hängt */
+  chapter?: number;
+  extra?: string;
 }
 export interface CardDef {
   title: string;
@@ -25,6 +27,7 @@ export interface Question {
   requires?: string;
   answer: string;
   gives?: string[];
+  fromChapter?: number;
 }
 export interface Contact {
   id: string;
@@ -33,28 +36,52 @@ export interface Contact {
   place: string;
   hue: number;
   unlockedBy?: string[];
-  phoneUnavailable?: string;
+  fromChapter?: number;
+  untilChapter?: number;
+  /** sitzt in Gewahrsam: Verhör im Revier ohne Einheit möglich */
+  custody?: boolean;
   questions: Question[];
 }
 export interface Place { name: string; lon: number; lat: number }
+export interface SceneItem { place: string; cardId: string; icon: string; dx: number; dy: number }
+
+export interface Chapter {
+  title: string;
+  intro: string[];
+  objective: string;
+  /** Verdächtiger, der in diesem Akt flieht */
+  culprit: string;
+  /** Kandidaten für den Haftbefehl */
+  candidates: string[];
+  start: string;
+  maxRounds: number;
+  pingRounds: number[];
+  taxis: number;
+  /** Zusätzliche Züge des Flüchtigen vor der ersten Runde */
+  headStart?: number;
+  escape?: { places: string[]; fromRound: number };
+  startCards: string[];
+  sceneItems: SceneItem[];
+  searchAt?: string[];
+  timed: { round: number; card: string; needs?: string }[];
+  fugitiveIntro: string;
+  outro: string[];
+}
+
 export interface CaseDef {
   id: string;
   cityId: string;
+  kind: 'story' | 'quick';
   title: string;
   subtitle: string;
-  briefing: string[];
-  maxRounds: number;
-  pingRounds: number[];
+  teaser: string;
   places: Record<string, Place>;
-  crimeScene: string;
   units: { name: string; lon: number; lat: number }[];
   suspects: Suspect[];
   cards: Record<string, CardDef>;
-  startCards: string[];
-  sceneItems: { cardId: string; icon: string; dx: number; dy: number }[];
   combos: { a: string; b: string; result: string }[];
   contacts: Contact[];
-  timed: { round: number; card: string; needs?: string }[];
   dropItems: { icon: string; title: string }[];
-  fugitiveIntro: string;
+  chapters: Chapter[];
+  epilogue: string[];
 }

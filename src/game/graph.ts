@@ -2,6 +2,7 @@ import type { CityMap, GNode, MoveOption } from './types';
 import { dist, pointInRings } from './geo';
 import { mulberry32 } from './rng';
 
+
 export interface PlaceInput { key: string; name: string; x: number; y: number }
 
 export const UNIT_REACH = 1500; // Meter pro Runde (Streifenwagen)
@@ -88,6 +89,31 @@ export class CityGraph {
     });
   }
   unitReachList: number[][] = [];
+  private hopCache = new Map<number, number[]>();
+  /** Zugzahl des Flüchtigen (Fuß/U-Bahn-Kanten) von jedem Knoten zu Ziel t */
+  fugHops(t: number): number[] {
+    let d = this.hopCache.get(t);
+    if (d) return d;
+    const n = this.nodes.length; d = new Array(n).fill(99); d[t] = 0; const q = [t];
+    for (let qi = 0; qi < q.length; qi++) {
+      const v = q[qi];
+      const nb = [...this.walk[v], ...this.sub[v].map((e) => e.to)];
+      for (const w of nb) if (d[w] === 99) { d[w] = d[v] + 1; q.push(w); }
+    }
+    this.hopCache.set(t, d);
+    return d;
+  }
+  /** Ziele einer U-Bahn-Fahrt von v auf Linie r (max. SUBWAY_MAX_STOPS) */
+  subwayTargets(v: number, r: string): number[] {
+    const depth = new Map<number, number>([[v, 0]]); const q = [v];
+    for (let qi = 0; qi < q.length; qi++) {
+      const x = q[qi]; const dx = depth.get(x)!;
+      if (dx >= SUBWAY_MAX_STOPS) continue;
+      for (const e of this.sub[x]) if (e.routes.includes(r) && !depth.has(e.to)) { depth.set(e.to, dx + 1); q.push(e.to); }
+    }
+    depth.delete(v);
+    return [...depth.keys()];
+  }
 
   nearest(x: number, y: number, filter?: (i: number) => boolean): number {
     let best = -1, bd = Infinity;
@@ -103,15 +129,8 @@ export class CityGraph {
     for (const w of this.walk[v]) add({ to: w, mode: 'foot' });
     if (this.nodes[v].kind === 'station') {
       const letters = new Set(this.sub[v].flatMap((e) => e.routes.split('')));
-      for (const r of letters) {
-        const depth = new Map<number, number>([[v, 0]]); const q = [v];
-        for (let qi = 0; qi < q.length; qi++) {
-          const x = q[qi]; const dx = depth.get(x)!;
-          if (dx >= SUBWAY_MAX_STOPS) continue;
-          for (const e of this.sub[x]) if (e.routes.includes(r) && !depth.has(e.to)) { depth.set(e.to, dx + 1); q.push(e.to); }
-        }
-        for (const [w] of depth) if (w !== v && !opts.some((o) => o.to === w && o.mode === 'subway')) add({ to: w, mode: 'subway', route: r });
-      }
+      for (const r of letters)
+        for (const w of this.subwayTargets(v, r)) if (!opts.some((o) => o.to === w && o.mode === 'subway')) add({ to: w, mode: 'subway', route: r });
     }
     if (taxisLeft > 0) {
       const a = this.nodes[v];

@@ -19,8 +19,9 @@ const ITEM_SCALE = 2.2;
 const MAX_SCALE = 6, MIN_SCALE = 0.03;
 
 const C = {
-  water: '#04101c', grid: 'rgba(56,189,248,0.05)', land: '#0b1828', landEdge: '#1e4466', park: '#0c2420',
-  local: '#1c3550', major: '#2c5677', highway: '#3f77a3', path: '#163024', label: '#7fa9cc', node: '#9fc4e6',
+  water: '#030c16', grid: 'rgba(56,189,248,0.05)', land: '#13263b', landEdge: '#2a5a85', park: '#0f2c25',
+  local: '#081420', major: '#0a1a2b', highway: '#0d2236', path: '#1b3d31', label: '#8fb6d6', node: '#9fc4e6',
+  lots: 'rgba(120,170,215,0.22)', curb: 'rgba(110,160,205,0.35)',
 };
 
 export interface MapCallbacks {
@@ -248,10 +249,25 @@ export class MapView {
     ctx.fillStyle = C.park; ctx.fill(this.parks);
     ctx.lineCap = 'round'; ctx.lineJoin = 'round';
     const lw = (m: number, minPx: number) => Math.max(m, minPx / s);
+    const tl0 = this.toWorld(0, 0), br0 = this.toWorld(this.w, this.h);
+    // Häuserblöcke: Parzellen bei mittlerem Zoom
+    if (s > 0.7) {
+      ctx.strokeStyle = C.lots; ctx.lineWidth = Math.max(0.3, 0.8 / s);
+      const cs = Wimmel.cellSize;
+      for (let cx = Math.floor(tl0.x / cs) - 1; cx <= Math.floor(br0.x / cs); cx++)
+        for (let cy = Math.floor(tl0.y / cs) - 1; cy <= Math.floor(br0.y / cs); cy++) { const p = this.wimmel.lots(cx, cy); if (p) ctx.stroke(p); }
+    }
     ctx.strokeStyle = C.path; ctx.lineWidth = lw(2, 0.5); ctx.stroke(this.paths.path);
-    ctx.strokeStyle = C.local; ctx.lineWidth = lw(9, 0.6); ctx.stroke(this.paths.local);
-    ctx.strokeStyle = C.major; ctx.lineWidth = lw(13, 1); ctx.stroke(this.paths.major); ctx.stroke(this.paths.ramp);
-    ctx.strokeStyle = C.highway; ctx.lineWidth = lw(16, 1.4); ctx.stroke(this.paths.highway);
+    // Bordsteinkante (helle Kontur), dann Fahrbahn
+    if (s > 0.45) {
+      ctx.strokeStyle = C.curb;
+      ctx.lineWidth = lw(11, 1.6); ctx.stroke(this.paths.local);
+      ctx.lineWidth = lw(16, 2.2); ctx.stroke(this.paths.major); ctx.stroke(this.paths.ramp);
+      ctx.lineWidth = lw(19, 2.6); ctx.stroke(this.paths.highway);
+    }
+    ctx.strokeStyle = C.local; ctx.lineWidth = lw(9, 0.9); ctx.stroke(this.paths.local);
+    ctx.strokeStyle = C.major; ctx.lineWidth = lw(13, 1.3); ctx.stroke(this.paths.major); ctx.stroke(this.paths.ramp);
+    ctx.strokeStyle = C.highway; ctx.lineWidth = lw(16, 1.7); ctx.stroke(this.paths.highway);
     if (s > 1.2) { ctx.strokeStyle = 'rgba(160,200,230,0.18)'; ctx.lineWidth = 0.25; ctx.setLineDash([3, 3]); ctx.stroke(this.paths.local); ctx.stroke(this.paths.major); ctx.setLineDash([]); }
     ctx.globalAlpha = s > 1.5 ? 0.25 : 0.55;
     for (const sl of this.subway) { ctx.strokeStyle = sl.c; ctx.lineWidth = lw(5, 1.4); ctx.stroke(sl.p); }
@@ -302,6 +318,7 @@ export class MapView {
     this.drawLabels();
     this.drawAnnotations();
     this.drawTraces(t);
+    this.drawExits(t);
     this.drawNodes(viewer);
     if (viewer === 'fugitive' || viewer === 'reveal') this.drawFugitive(viewer, t);
     this.drawUnits(t);
@@ -398,6 +415,22 @@ export class MapView {
         ctx.fillStyle = col; ctx.font = 'bold 11px "JetBrains Mono", monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(icon, p.x, p.y + 0.5);
         label(ctx, tr.kind === 'start' ? 'TATORT' : 'R' + tr.round, p.x + 20, p.y - 12, col);
       }
+      ctx.restore();
+    }
+  }
+
+  private drawExits(t: number) {
+    const g = this.game, ex = g.chapter.escape; if (!ex) return;
+    const open = g.round >= ex.fromRound;
+    const ctx = this.ctx;
+    for (const n of g.escapeNodes()) {
+      const nd = g.graph.nodes[n]; const p = this.toScreen(nd.x, nd.y);
+      ctx.save();
+      ctx.strokeStyle = open ? '#f43f5e' : '#a3a3a3'; ctx.fillStyle = 'rgba(5,16,28,.9)'; ctx.lineWidth = 2;
+      const pulse = open ? 4 + Math.sin(t * 4) * 3 : 0;
+      ctx.beginPath(); ctx.roundRect(p.x - 13 - pulse / 2, p.y - 13 - pulse / 2, 26 + pulse, 26 + pulse, 4); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = open ? '#f43f5e' : '#a3a3a3'; ctx.font = '14px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('⇲', p.x, p.y + 1);
+      label(ctx, open ? 'FLUCHTPUNKT OFFEN' : `FLUCHTPUNKT AB R${ex.fromRound}`, p.x, p.y + 24, open ? '#f43f5e' : '#a3a3a3');
       ctx.restore();
     }
   }
