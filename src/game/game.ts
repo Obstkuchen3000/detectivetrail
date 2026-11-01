@@ -1,6 +1,7 @@
 import type { CaseDef, CardDef, Chapter, Contact } from '../cases/types';
 import type { Annotation, BoardCard, CityMap, HiddenItem, HiddenState, LogEntry, MoveOption, RaidState, SearchArea, Trace, Unit } from './types';
 import { makeBuilding, roomNeighbors, type Building } from './building';
+import { BASE_MODS, buildMods, PERKS, type Mods, type Side } from './progress';
 import { CityGraph, TAXI_MIN, UNIT_REACH } from './graph';
 import { dist, project } from './geo';
 import { Rng } from './rng';
@@ -14,7 +15,8 @@ export type Sfx = 'click' | 'pin' | 'thread' | 'snap' | 'found' | 'phone' | 'ans
 
 export const AP_PER_ROUND = 2;
 export type AiLevel = 'leicht' | 'normal' | 'schwer';
-export interface GameOptions { police: AiLevel; fugitive: AiLevel }
+export interface GameOptions { police: AiLevel; fugitive: AiLevel; talents?: Record<string, number>; side?: Side | null; heat?: number }
+const LEVELS: AiLevel[] = ['leicht', 'normal', 'schwer'];
 export const HELI_RADIUS = 500;
 export const ACTION_COST = { search: 1, roadblock: 1, observe: 1, heli: 2, raid: 1 } as const;
 export const RAID_TURNS = 4, RAID_ACTIONS = 3, RAID_LOOK_SECONDS = 25;
@@ -39,6 +41,15 @@ export class Game {
   observed: number[] = [];
   resolved: string[] = [];
   opts: GameOptions = { police: 'normal', fugitive: 'normal' };
+  /** Roguelite: gewählte Einsatzkarten/Kniffe und aktuelle Auswahl */
+  /** Optionen wie gewählt (vor Fahndungsdruck), für Speicherstände */
+  rawOpts: GameOptions = { police: 'normal', fugitive: 'normal' };
+  perks: string[] = [];
+  draft: string[] = [];
+  mods: Mods = { ...BASE_MODS };
+  charges = { informant: 0, freeHeli: 0, freeObserve: 0, jammer: 0 };
+  freeCallsUsed = 0;
+  xpAwarded = false;
   units: Unit[];
   traces: Trace[] = [];
   annotations: Annotation[] = [];
@@ -67,6 +78,13 @@ export class Game {
   constructor(public map: CityMap, public def: CaseDef, public mode: GameMode, public seed = (Date.now() & 0xffffff) + 1, opts?: Partial<GameOptions>) {
     this.rng = new Rng(seed);
     this.opts = { ...this.opts, ...opts };
+    this.rawOpts = { ...this.opts };
+    // Fahndungsdruck macht den Gegner stärker
+    const heat = this.opts.heat ?? 0;
+    const bump = (l: AiLevel) => LEVELS[Math.min(2, LEVELS.indexOf(l) + (heat >= 3 ? 2 : heat))];
+    if (this.opts.side === 'det') this.opts.fugitive = bump(this.opts.fugitive);
+    if (this.opts.side === 'fug') this.opts.police = bump(this.opts.police);
+    this.mods = buildMods(this.opts.talents ?? {}, this.opts.side ?? null, []);
     const places = Object.entries(def.places).map(([key, p]) => { const [x, y] = project(map, p.lon, p.lat); return { key, name: p.name, x, y }; });
     this.graph = new CityGraph(map, places, seed);
     this.cards = { ...def.cards };
@@ -80,11 +98,65 @@ export class Game {
       used.add(node);
       return { id: 'u' + i, name: 'Einheit ' + u.name, short: u.name[0], color: UNIT_COLORS[i % 4], node, moved: false };
     });
+    for (let k = 0; k < this.mods.extraUnits; k++) {
+      const occ = new Set(this.units.map((u) => u.node));
+      const base = this.graph.nodes[this.units[0].node];
+      const node = this.graph.nearest(base.x + 600, base.y - 600, (i) => !occ.has(i) && this.graph.nodes[i].kind === 'station');
+      this.units.push({ id: 'u' + this.units.length, name: 'Einheit Echo', short: 'E', color: '#c084fc', node, moved: false });
+    }
+    this.graph.setUnitReach(UNIT_REACH + this.mods.unitReachBonus);
     this.addLog('Fall eröffnet: ' + def.title, 'info');
     this.startChapter(0);
   }
 
   get chapter(): Chapter { return this.def.chapters[this.chapterIdx]; }
+  /** Rundenlimit des Akts (Fahndungsdruck verkürzt bzw. verlängert) */
+  get maxRounds() {
+    const heat = this.opts.heat ?? 0; const d = heat >= 3 ? 2 : heat >= 2 ? 1 : 0;
+    return this.chapter.maxRounds + (this.opts.side === 'det' ? -d : this.opts.side === 'fug' ? d : 0);
+  }
+  get pingRounds() {
+    const pr = this.chapter.pingRounds;
+    return (this.opts.heat ?? 0) >= 3 && this.opts.side === 'det' ? pr.filter((_, i) => i % 2 === 0) : pr;
+  }
+  costOf(action: keyof typeof ACTION_COST) {
+    if (action === 'heli' && this.charges.freeHeli > 0) return 0;
+    if (action === 'observe' && this.charges.freeObserve > 0) return 0;
+    return ACTION_COST[action];
+  }
+  apForRound(first: boolean) {
+    return AP_PER_ROUND + (first ? this.mods.apFirstRound : 0) + (!first && this.mods.apEvery && this.round % this.mods.apEvery === 0 ? 1 : 0);
+  }
+  /** Aktuelle Werte des Flüchtigen zu Aktbeginn (nach Talenten/Kniffen) */
+  private chapterFugitiveStats() {
+    const ch = this.chapter;
+    return { taxis: ch.taxis + (ch.tutorial ? 0 : this.mods.taxis), gadgets: { disguise: ch.tutorial ? 0 : 1 + this.mods.disguises, decoy: ch.tutorial ? 0 : 1 + this.mods.decoys }, movesLeft: 1 + (ch.headStart ?? 0) + (ch.tutorial ? 0 : this.mods.headStart) };
+  }
+  pickPerk(id: string) {
+    if (this.phase !== 'chapter-intro' || !this.draft.includes(id)) return;
+    const before = this.mods;
+    this.perks.push(id);
+    this.mods = buildMods(this.opts.talents ?? {}, this.opts.side ?? null, this.perks);
+    this.charges.informant += this.mods.informant - before.informant;
+    this.charges.freeHeli += this.mods.freeHeli - before.freeHeli;
+    this.charges.freeObserve += this.mods.freeObserve - before.freeObserve;
+    this.charges.jammer += this.mods.jammer - before.jammer;
+    this.graph.setUnitReach(UNIT_REACH + this.mods.unitReachBonus);
+    Object.assign(this.fugitive, this.chapterFugitiveStats());
+    this.ap = this.apForRound(true);
+    this.draft = [];
+    this.addLog(`Gewählt: ${PERKS.find((p) => p.id === id)!.name}`, 'good');
+    this.sfx('found'); this.emit();
+  }
+  skipDraft() { this.draft = []; this.emit(); }
+  useInformant() {
+    if (this.phase !== 'detective' || this.charges.informant <= 0) return;
+    this.charges.informant--;
+    const N = this.graph.nodes[this.fugitive.node];
+    this.addTrace({ round: this.round, kind: 'sighting', x: N.x, y: N.y, node: this.fugitive.node, text: `Informant: Die Zielperson ist gerade bei ${N.name}${this.fugitive.hidden ? ' (in einem Gebäude)' : ''}` });
+    this.belief = [this.fugitive.node];
+    this.notify(`Ihr Informant meldet sich: Die Zielperson ist bei ${N.name}.`, 'good'); this.sfx('trace'); this.emit();
+  }
   get culprit() { return this.def.suspects.find((s) => s.id === this.chapter.culprit)!; }
   get isLastChapter() { return this.chapterIdx >= this.def.chapters.length - 1; }
   rnd = () => this.rng.next();
@@ -103,7 +175,7 @@ export class Game {
   startChapter(i: number) {
     this.chapterIdx = i;
     const ch = this.chapter;
-    this.round = 1; this.ap = AP_PER_ROUND; this.warrant = null; this.result = null;
+    this.round = 1; this.warrant = null; this.result = null; this.freeCallsUsed = 0;
     this.traces = []; this.searchAreas = []; this.items = []; this.marked.clear(); this.cleared.clear(); this.callActive.clear();
     this.units.forEach((u) => (u.moved = false));
     const start = this.placeNode(ch.start);
@@ -113,7 +185,11 @@ export class Game {
       const sn = this.graph.nodes[start];
       u.node = this.graph.nearest(sn.x + 1400, sn.y + 900, (k) => !occ.has(k) && this.graph.nodes[k].kind === 'station');
     }
-    this.fugitive = { node: start, taxis: ch.taxis, path: [{ round: 0, node: start, mode: 'stay' }], movesLeft: 1 + (ch.headStart ?? 0), disguise: 0, gadgets: { disguise: ch.tutorial ? 0 : 1, decoy: ch.tutorial ? 0 : 1 }, decoyArmed: false, hidden: null };
+    this.fugitive = { node: start, path: [{ round: 0, node: start, mode: 'stay' }], disguise: 0, decoyArmed: false, hidden: null, ...this.chapterFugitiveStats() };
+    this.ap = this.apForRound(true);
+    // Roguelite-Auswahl: drei zufällige Karten der eigenen Seite
+    const side = this.opts.side;
+    this.draft = side && !ch.tutorial ? this.rng.shuffle(PERKS.filter((p) => p.side === side).map((p) => p.id)).slice(0, 3) : [];
     this.roadblocks = []; this.observed = []; this.raid = null; this.raidedThisRound = [];
     const sn = this.graph.nodes[start];
     this.addTrace({ round: 0, kind: 'start', x: sn.x, y: sn.y, text: (i === 0 ? 'Tatort: ' : 'Ausgangspunkt: ') + sn.name, tag: i === 0 ? 'TATORT' : 'START' });
@@ -154,7 +230,7 @@ export class Game {
   // ---------------- Flüchtiger ----------------
   blockedForFugitive() {
     const b = new Set(this.units.map((u) => u.node));
-    for (const r of this.roadblocks) if (r.round === this.round - 1) b.add(r.node);
+    for (const r of this.roadblocks) if (r.round < this.round && r.round >= this.round - 1 - this.mods.roadblockRounds) b.add(r.node);
     const t = this.ambushTarget(); if (t !== null) b.delete(t); // getarnte Observation am Ziel
     return b;
   }
@@ -186,10 +262,10 @@ export class Game {
     for (let i = 0; i < rooms.length; i++) { x -= w[i]; if (x <= 0) return rooms[i].id; }
     return rooms[rooms.length - 1].id;
   }
-  activeRoadblocks() { return this.roadblocks.filter((r) => r.round >= this.round - (this.phase === 'detective' ? 0 : 1)); }
+  activeRoadblocks() { return this.roadblocks.filter((r) => r.round >= this.round - (this.phase === 'detective' ? 0 : 1) - this.mods.roadblockRounds); }
 
   // Hilfsmittel des Flüchtigen
-  useDisguise() { if (this.phase !== 'fugitive' || this.fugitive.gadgets.disguise <= 0) return; this.fugitive.gadgets.disguise--; this.fugitive.disguise = 2; this.sfx('click'); this.emit(); }
+  useDisguise() { if (this.phase !== 'fugitive' || this.fugitive.gadgets.disguise <= 0) return; this.fugitive.gadgets.disguise--; this.fugitive.disguise = 2 + this.mods.disguiseLen; this.sfx('click'); this.emit(); }
   armDecoy() { if (this.phase !== 'fugitive' || this.fugitive.gadgets.decoy <= 0) return; this.fugitive.gadgets.decoy--; this.fugitive.decoyArmed = true; this.sfx('click'); this.emit(); }
 
   private runAi() {
@@ -214,7 +290,7 @@ export class Game {
     this.fugitive.node = to;
     this.fugitive.path.push({ round: this.round, node: to, mode: opt.mode, route: opt.route });
     const r = this.round;
-    const camChance = this.fugitive.disguise > 0 ? 0 : this.chapter.tutorial ? 1 : this.warrant ? 0.85 : 0.5;
+    const camChance = this.fugitive.disguise > 0 ? 0 : this.chapter.tutorial ? 1 : Math.max(0, Math.min(1, (this.warrant ? 0.85 : 0.5) + this.mods.camBonus - this.mods.camMinus));
     const fresh: Trace[] = [];
     const tr = (t: Omit<Trace, 'id'>) => { this.addTrace(t); fresh.push(this.traces[this.traces.length - 1]); };
     if (opt.mode === 'subway') tr({ round: r, kind: 'metrocard', x: A.x, y: A.y, node: from, route: opt.route, text: `Fahrkarte entwertet: ${A.name}, Linie ${opt.route}` });
@@ -236,7 +312,7 @@ export class Game {
     }
     if (this.observed.includes(to) && this.fugitive.disguise <= 0) tr({ round: r, kind: 'cctv', x: B.x, y: B.y, node: to, text: `Observation meldet Zielperson: ${B.name}` });
     else if (opt.mode !== 'stay' && B.camera && this.rnd() < camChance) tr({ round: r, kind: 'cctv', x: B.x, y: B.y, node: to, text: `Kamera-Treffer: ${B.name}` });
-    if (opt.mode !== 'stay' && this.rnd() < 0.4) {
+    if (opt.mode !== 'stay' && this.rnd() < 0.4 * this.mods.dropMul) {
       const d = this.def.dropItems[Math.floor(this.rnd() * this.def.dropItems.length)];
       const ang = this.rnd() * Math.PI * 2, off = 25 + this.rnd() * 70;
       this.items.push({ id: 'drop' + this.nextId++, x: A.x + Math.cos(ang) * off, y: A.y + Math.sin(ang) * off, icon: d.icon, title: d.title, round: r - 1, found: false });
@@ -244,9 +320,13 @@ export class Game {
     this.fugitive.movesLeft--;
     const done = this.fugitive.movesLeft <= 0;
     if (done && this.fugitive.disguise > 0) this.fugitive.disguise--;
-    if (done && this.chapter.pingRounds.includes(r)) {
-      const ang = this.rnd() * Math.PI * 2, off = this.rnd() * 520;
-      tr({ round: r, kind: 'ping', x: B.x + Math.cos(ang) * off, y: B.y + Math.sin(ang) * off, r: 700, text: 'Funkzelle: Ein Prepaid-Handy hat sich eingewählt' });
+    if (done && this.pingRounds.includes(r)) {
+      if (this.charges.jammer > 0) { this.charges.jammer--; this.addLog('Funkzelle: Störung im Netz, keine Ortung möglich.', 'info'); }
+      else {
+        const pm = this.mods.pingRadiusMul * this.mods.pingRadiusMulFug;
+        const ang = this.rnd() * Math.PI * 2, off = this.rnd() * 520 * pm;
+        tr({ round: r, kind: 'ping', x: B.x + Math.cos(ang) * off, y: B.y + Math.sin(ang) * off, r: Math.round(700 * pm), text: 'Funkzelle: Ein Prepaid-Handy hat sich eingewählt' });
+      }
     }
     this.stats.tracesLeft += fresh.length;
     updateBeliefAfterMove(this, fresh);
@@ -310,7 +390,7 @@ export class Game {
     this.fugitive.movesLeft--;
     const done = this.fugitive.movesLeft <= 0;
     if (done && this.fugitive.disguise > 0) this.fugitive.disguise--;
-    if (done && this.chapter.pingRounds.includes(r)) this.addLog('Funkzelle: Das gesuchte Handy hat kein Netz, vielleicht abgeschirmt.', 'info');
+    if (done && this.pingRounds.includes(r)) this.addLog('Funkzelle: Das gesuchte Handy hat kein Netz, vielleicht abgeschirmt.', 'info');
     this.stats.tracesLeft += fresh.length;
     updateBeliefAfterMove(this, fresh);
     this.sfx('move');
@@ -333,6 +413,7 @@ export class Game {
     return true;
   }
   fugitiveInRaid() { return !!this.raid && !!this.fugitive.hidden && this.fugitive.hidden.node === this.raid.node; }
+  raidSeconds() { return RAID_LOOK_SECONDS + this.mods.raidSeconds; }
   raidSearch(room: number) {
     const R = this.raid; if (!R || R.ended || R.actions <= 0 || R.open !== null) return false;
     R.actions--; R.open = room; R.openedAt = Date.now();
@@ -405,7 +486,7 @@ export class Game {
       const h = this.fugitive.hidden!;
       const cur = b.rooms[h.room];
       // Fluchtversuch über einen ungesicherten Ausgang
-      if (cur.exit && !R.guarded.includes(cur.id) && R.turn >= 2 && this.rnd() < 0.75) {
+      if (cur.exit && !R.guarded.includes(cur.id) && R.turn >= 2 && this.rnd() < Math.min(0.97, 0.75 + this.mods.raidEscape)) {
         const occ = new Set(this.units.map((u) => u.node));
         const out = this.graph.walk[R.node].filter((n) => !occ.has(n));
         const dest = out.length ? out[Math.floor(this.rnd() * out.length)] : R.node;
@@ -481,7 +562,7 @@ export class Game {
   placeSearch(x: number, y: number) {
     if (!this.canSpend()) return false;
     this.ap--;
-    this.searchAreas.push({ x, y, r: SEARCH_RADIUS, round: this.round });
+    this.searchAreas.push({ x, y, r: Math.round(SEARCH_RADIUS * this.mods.searchRadiusMul), round: this.round });
     if (this.mode !== 'fugitive') this.notify('Suchgebiet eingerichtet. Zoomen Sie hinein und suchen Sie nach Auffälligkeiten.', 'info');
     this.sfx('radio');
     this.emit();
@@ -497,16 +578,16 @@ export class Game {
   }
 
   placeObservation(node: number) {
-    if (!this.canSpend(ACTION_COST.observe) || this.observed.includes(node)) return false;
-    this.ap -= ACTION_COST.observe;
+    if (this.phase !== 'detective' || this.ap < this.costOf('observe') || this.observed.includes(node)) return false;
+    if (this.charges.freeObserve > 0) this.charges.freeObserve--; else this.ap -= ACTION_COST.observe;
     this.observed.push(node);
     if (this.mode !== 'fugitive') this.notify(`Observation eingerichtet: ${this.graph.nodes[node].name} wird ab jetzt dauerhaft überwacht.`, 'info');
     this.sfx('radio'); this.emit(); return true;
   }
 
   heliScan(x: number, y: number) {
-    if (!this.canSpend(ACTION_COST.heli)) return false;
-    this.ap -= ACTION_COST.heli;
+    if (this.phase !== 'detective' || this.ap < this.costOf('heli')) return false;
+    if (this.charges.freeHeli > 0) this.charges.freeHeli--; else this.ap -= ACTION_COST.heli;
     const F = this.graph.nodes[this.fugitive.node];
     if (dist(F.x, F.y, x, y) <= HELI_RADIUS && this.fugitive.disguise <= 0) {
       this.addTrace({ round: this.round, kind: 'heli', x: F.x, y: F.y, node: this.fugitive.node, text: `Hubschrauber: Wärmebild erfasst Zielperson bei ${F.name}` });
@@ -591,10 +672,10 @@ export class Game {
     } else {
       this.cleared.add(id);
       this.stats.wrongWarrants++;
-      this.round += 2;
-      this.notify(`Der Haftbefehl gegen ${s.name} wird abgelehnt, die Beweise reichen nicht. Sie verlieren 2 Runden.`, 'bad');
+      this.round += this.mods.warrantPenalty;
+      this.notify(`Der Haftbefehl gegen ${s.name} wird abgelehnt, die Beweise reichen nicht. Sie verlieren ${this.mods.warrantPenalty} Runde(n).`, 'bad');
       this.sfx('fail');
-      if (this.round > this.chapter.maxRounds) this.finishFugitiveWin();
+      if (this.round > this.maxRounds) this.finishFugitiveWin();
     }
     this.emit();
   }
@@ -614,8 +695,10 @@ export class Game {
   callIsActive(c: Contact) { return this.callActive.get(c.id) === this.round; }
   startCall(c: Contact) {
     if (this.callIsActive(c)) return true;
-    if (!this.canSpend()) return false;
-    this.ap--; this.callActive.set(c.id, this.round); this.sfx('phone'); this.emit(); return true;
+    if (this.phase !== 'detective') return false;
+    if (this.freeCallsUsed < this.mods.freeCalls) this.freeCallsUsed++;
+    else { if (!this.canSpend()) return false; this.ap--; }
+    this.callActive.set(c.id, this.round); this.sfx('phone'); this.emit(); return true;
   }
   isAsked(c: Contact, qId: string) { return this.asked.includes(c.id + '.' + qId); }
   ask(c: Contact, qId: string, mode: 'phone' | 'person') {
@@ -659,8 +742,8 @@ export class Game {
     if (this.phase !== 'detective') return;
     updateBeliefAfterUnits(this);
     this.round++;
-    if (this.round > this.chapter.maxRounds) { this.finishFugitiveWin(); this.emit(); return; }
-    this.ap = AP_PER_ROUND;
+    if (this.round > this.maxRounds) { this.finishFugitiveWin(); this.emit(); return; }
+    this.ap = this.apForRound(false); this.freeCallsUsed = 0;
     this.units.forEach((u) => (u.moved = false));
     this.board.forEach((c) => (c.isNew = false));
     this.fugitive.movesLeft = 1;
@@ -669,7 +752,7 @@ export class Game {
   }
 
   private finishFugitiveWin() {
-    this.stats.roundsUsed += Math.min(this.round, this.chapter.maxRounds);
+    this.stats.roundsUsed += Math.min(this.round, this.maxRounds);
     this.result = { winner: 'fugitive', reason: `${this.culprit.name} ist entkommen. Die Zeit ist abgelaufen, und die Spur ist kalt.`, final: true };
     this.phase = 'over';
     this.sfx('fail');
@@ -685,7 +768,7 @@ export class Game {
       fugitive: this.fugitive, units: this.units, traces: this.traces, annotations: this.annotations, searchAreas: this.searchAreas, items: this.items,
       board: [...this.board.values()], threads: this.threads, cleared: [...this.cleared], marked: [...this.marked], warrant: this.warrant,
       asked: this.asked, callActive: [...this.callActive], log: this.log, result: this.result, belief: this.belief, aiWarrantRound: this.aiWarrantRound,
-      chapterSnapshot: this.chapterSnapshot, stats: this.stats, nextId: this.nextId, roadblocks: this.roadblocks, observed: this.observed, resolved: this.resolved, opts: this.opts, raid: this.raid, raidedThisRound: this.raidedThisRound,
+      chapterSnapshot: this.chapterSnapshot, stats: this.stats, nextId: this.nextId, roadblocks: this.roadblocks, observed: this.observed, resolved: this.resolved, opts: this.rawOpts, raid: this.raid, raidedThisRound: this.raidedThisRound, perks: this.perks, draft: this.draft, xpAwarded: this.xpAwarded, charges: this.charges, freeCallsUsed: this.freeCallsUsed,
     });
   }
 
@@ -702,6 +785,9 @@ export class Game {
     g.roadblocks = d.roadblocks ?? []; g.observed = d.observed ?? []; g.resolved = d.resolved ?? [];
     g.fugitive = { disguise: 0, gadgets: { disguise: 0, decoy: 0 }, decoyArmed: false, hidden: null, ...d.fugitive };
     g.raid = d.raid ?? null; g.raidedThisRound = d.raidedThisRound ?? [];
+    g.xpAwarded = !!d.xpAwarded;
+    g.perks = d.perks ?? []; g.draft = d.draft ?? []; g.charges = d.charges ?? g.charges; g.freeCallsUsed = d.freeCallsUsed ?? 0;
+    g.mods = buildMods(g.opts.talents ?? {}, g.opts.side ?? null, g.perks); g.graph.setUnitReach(UNIT_REACH + g.mods.unitReachBonus);
     if (g.raid && g.raid.open !== null) g.raid.openedAt = Date.now();
     return g;
   }

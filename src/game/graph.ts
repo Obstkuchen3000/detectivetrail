@@ -75,10 +75,17 @@ export class CityGraph {
       this.sub[A].push({ to: B, routes }); this.sub[B].push({ to: A, routes });
     }
 
-    // Erreichbarkeit der Einheiten
+    this.setUnitReach(UNIT_REACH);
+  }
+
+  /** Reichweite der Einheiten (Meter pro Runde) – Talente können sie erhöhen */
+  unitReachMeters = UNIT_REACH;
+  setUnitReach(meters: number) {
+    const N = this.nodes, n = N.length;
+    this.unitReachMeters = meters;
     const reach: number[][] = Array.from({ length: n }, (_, i) => {
       const r: number[] = [];
-      for (let j = 0; j < n; j++) if (j !== i && dist(N[i].x, N[i].y, N[j].x, N[j].y) <= UNIT_REACH) r.push(j);
+      for (let j = 0; j < n; j++) if (j !== i && dist(N[i].x, N[i].y, N[j].x, N[j].y) <= meters) r.push(j);
       return r;
     });
     this.unitReachList = reach;

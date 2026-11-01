@@ -1,7 +1,6 @@
 import type { Game } from '../game/game';
 import type { Annotation, CityMap, MoveOption, Trace } from '../game/types';
-import { UNIT_REACH } from '../game/graph';
-import { ACTION_COST, HELI_RADIUS } from '../game/game';
+import { HELI_RADIUS } from '../game/game';
 import { dist } from '../game/geo';
 import { Wimmel, drawClue, drawFig } from './wimmel';
 
@@ -202,7 +201,7 @@ export class MapView {
       }
       case 'search': case 'heli': case 'roadblock': case 'observe': {
         if (g.phase !== 'detective') return;
-        if (!g.canSpend(ACTION_COST[this.tool])) { this.cb.onHint(`Dafür fehlen Einsatzpunkte (benötigt: ${ACTION_COST[this.tool]}).`); return; }
+        if (!g.canSpend(g.costOf(this.tool))) { this.cb.onHint(`Dafür fehlen Einsatzpunkte (benötigt: ${g.costOf(this.tool)}).`); return; }
         if (this.tool === 'search') g.placeSearch(wx, wy);
         else if (this.tool === 'heli') g.heliScan(wx, wy);
         else {
@@ -539,7 +538,7 @@ export class MapView {
       const sel = i === this.selectedUnit;
       if (sel) {
         ctx.save(); ctx.strokeStyle = u.color; ctx.globalAlpha = 0.35; ctx.setLineDash([4, 6]); ctx.lineWidth = 1.5;
-        ctx.beginPath(); ctx.arc(p.x, p.y, UNIT_REACH * this.scale, 0, Math.PI * 2); ctx.stroke(); ctx.restore();
+        ctx.beginPath(); ctx.arc(p.x, p.y, g.graph.unitReachMeters * this.scale, 0, Math.PI * 2); ctx.stroke(); ctx.restore();
       }
       ctx.save(); ctx.globalAlpha = u.moved && g.phase === 'detective' ? 0.6 : 1;
       ctx.fillStyle = '#05101c'; ctx.strokeStyle = u.color; ctx.lineWidth = sel ? 3 : 2;

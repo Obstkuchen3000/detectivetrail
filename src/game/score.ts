@@ -9,7 +9,7 @@ const FUG_RANKS = ['Kleinkrimineller', 'Gerissener Ganove', 'Meisterdieb', 'Phan
 export function computeScore(g: Game): Score {
   const lines: [string, number][] = [];
   const insights = [...g.board.keys()].filter((k) => g.cards[k].kind === 'erkenntnis').length;
-  const totalMax = g.def.chapters.slice(0, g.chapterIdx + 1).reduce((s, c) => s + c.maxRounds, 0);
+  const totalMax = g.def.chapters.slice(0, g.chapterIdx + 1).reduce((s, c) => s + c.maxRounds, 0) - (g.chapter.maxRounds - g.maxRounds) * (g.chapterIdx + 1);
   if (g.mode === 'fugitive') {
     const escaped = g.result?.winner === 'fugitive';
     lines.push(['Durchgehaltene Runden', g.stats.roundsUsed * 25]);
@@ -26,7 +26,7 @@ export function computeScore(g: Game): Score {
     lines.push(['Gerissene Fäden', -g.stats.wrongThreads * 10]);
     lines.push(['Falsche Haftbefehle', -g.stats.wrongWarrants * 120]);
     lines.push(['Falsch vorgelegte Beweise', -g.stats.wrongPresent * 15]);
-    lines.push(['Benutzte Tipps', -g.stats.hints * 40]);
+    lines.push(['Benutzte Tipps', -g.stats.hints * g.mods.hintCost]);
   }
   const points = Math.max(0, Math.round(lines.reduce((s, [, v]) => s + v, 0)));
   // Maßstab relativ zur Zahl der Akte
