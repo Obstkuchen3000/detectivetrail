@@ -11,6 +11,7 @@ export class Pinboard {
   private from: string | null = null;
   private side: HTMLElement;
   private cardEls = new Map<string, HTMLElement>();
+  private z = 10;
 
   constructor(private game: Game, private onShowContact: () => void) {
     this.svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -107,8 +108,7 @@ export class Pinboard {
     el.addEventListener('pointerdown', (e) => {
       if ((e.target as HTMLElement).closest('.pin')) return;
       const c = this.game.board.get(id)!; start = { x: e.clientX, y: e.clientY, cx: c.x, cy: c.y };
-      el.setPointerCapture(e.pointerId); el.classList.add('dragging');
-      this.board.append(el);
+      el.style.zIndex = String(++this.z); el.setPointerCapture(e.pointerId); el.classList.add('dragging');
     });
     el.addEventListener('pointermove', (e) => {
       if (!start) return;

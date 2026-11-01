@@ -71,13 +71,15 @@ export class MapView {
     this.subway = [...byColor].map(([c, p]) => ({ c, p }));
     this.wimmel = new Wimmel(map);
     this.bind();
-    new ResizeObserver(() => this.resize()).observe(host);
+    this.ro = new ResizeObserver(() => this.resize());
+    this.ro.observe(host);
     this.resize();
     this.fitToGame();
     this.loop();
   }
 
-  destroy() { cancelAnimationFrame(this.raf); this.canvas.remove(); }
+  private ro: ResizeObserver;
+  destroy() { cancelAnimationFrame(this.raf); this.ro.disconnect(); this.canvas.remove(); }
 
   resize() {
     this.dpr = window.devicePixelRatio || 1;
@@ -226,7 +228,7 @@ export class MapView {
   }
 
   // ---------------- Zeichnen ----------------
-  private loop = () => { this.draw(); this.raf = requestAnimationFrame(this.loop); };
+  private loop = () => { if (this.host.offsetParent !== null) this.draw(); this.raf = requestAnimationFrame(this.loop); };
 
   private draw() {
     const ctx = this.ctx, g = this.game, s = this.scale, dpr = this.dpr;
@@ -413,7 +415,7 @@ export class MapView {
         if (tr.kind === 'sighting') { const k = (t % 1.5) / 1.5; ctx.globalAlpha = alpha * (1 - k); ctx.beginPath(); ctx.arc(p.x, p.y, 10 + k * 22, 0, Math.PI * 2); ctx.stroke(); ctx.globalAlpha = alpha; }
         ctx.fillStyle = '#05101c'; ctx.beginPath(); ctx.arc(p.x, p.y, 10, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
         ctx.fillStyle = col; ctx.font = 'bold 11px "JetBrains Mono", monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(icon, p.x, p.y + 0.5);
-        label(ctx, tr.kind === 'start' ? 'TATORT' : 'R' + tr.round, p.x + 20, p.y - 12, col);
+        label(ctx, tr.kind === 'start' ? (tr.tag ?? 'START') : 'R' + tr.round, p.x + 20, p.y - 12, col);
       }
       ctx.restore();
     }

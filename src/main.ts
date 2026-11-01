@@ -376,6 +376,7 @@ function startGame(game: Game) {
       if (chapterOnly) buttons.push(h('button', { class: 'btn big', onclick: () => { reveal = false; game.nextChapter(); } }, `Weiter zu Akt ${game.chapterIdx + 2} ▶`));
       if (!detWin && game.chapterSnapshot) buttons.push(h('button', { class: 'btn', onclick: () => { const g2 = Game.restore(map, def, game.chapterSnapshot!); startGame(g2); } }, '↻ Akt wiederholen'));
       buttons.push(h('button', { class: 'btn ghost', onclick: () => { reveal = true; switchView('map'); mv.fitToGame(); } }, 'Fluchtroute ansehen'));
+      if ((r.final || !detWin) && def.kind === 'quick') buttons.push(h('button', { class: 'btn', onclick: () => quickMenu(def.cityId) }, '🎲 Neuer Schnellfall'));
       if (r.final || !detWin) buttons.push(h('button', { class: 'btn ghost', onclick: () => title() }, 'Hauptmenü'));
       overlay.append(h('div', { class: 'handover ' + (playerWon ? 'win' : 'lose') }, h('div', { class: 'endcard' },
         h('div', { class: 'big-icon' }, detWin ? '🚔' : '💨'),
@@ -412,7 +413,9 @@ function startGame(game: Game) {
       }
       if (game.mode === 'fugitive' && game.phase === 'fugitive' && game.round > 1 && game.fugitive.movesLeft === 1) toast(`Runde ${game.round}: Die Polizei hat ihre Einheiten verlegt.`, 'info');
       if (game.phase === 'chapter-intro') { reveal = false; setTimeout(focusStart, 30); }
-      if (['detective', 'fugitive', 'chapter-intro', 'over'].includes(game.phase)) doSave('auto');
+      if (game.phase === 'handover-detective' || game.phase === 'handover-fugitive') { mv.selectedUnit = null; mv.fitToGame(); }
+      if (game.phase === 'over' && game.result && (game.result.final || game.result.winner === 'fugitive')) deleteSave('auto');
+      else if (['detective', 'fugitive', 'chapter-intro', 'over'].includes(game.phase)) doSave('auto');
     }
     lastKey = key;
     render();

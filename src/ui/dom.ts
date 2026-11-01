@@ -17,6 +17,7 @@ export function toast(text: string, kind: 'good' | 'bad' | 'info' = 'info') {
   if (!box) { box = h('div', { class: 'toasts' }); document.body.append(box); }
   const t = h('div', { class: 'toast ' + kind }, text);
   box.append(t);
+  while (box.children.length > 4) box.firstElementChild!.remove();
   setTimeout(() => t.classList.add('out'), 4200);
   setTimeout(() => t.remove(), 4800);
 }

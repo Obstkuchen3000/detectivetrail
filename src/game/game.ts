@@ -183,7 +183,7 @@ export class Game {
       this.phase = 'over'; this.sfx('fail'); this.emit(); return;
     }
     if (!done) { this.emit(); return; }
-    for (const t of this.chapter.timed) if (t.round === r && (!t.needs || this.board.has(t.needs)) && !this.board.has(t.card)) { this.placeCard(t.card); this.notify('Neue Unterlagen: ' + this.cards[t.card].title, 'info'); }
+    for (const t of this.chapter.timed) if (t.round <= r && (!t.needs || this.board.has(t.needs)) && !this.board.has(t.card)) { this.placeCard(t.card); this.notify('Neue Unterlagen: ' + this.cards[t.card].title, 'info'); }
     if (this.mode === 'fugitive') {
       this.phase = 'detective';
       detectiveAiTurn(this);
@@ -192,7 +192,6 @@ export class Game {
       return;
     }
     this.phase = this.mode === 'hotseat' ? 'handover-detective' : 'detective';
-    this.lastEvent = null;
     if (fresh.length) this.sfx('trace');
     this.emit();
   }
@@ -399,6 +398,8 @@ export class Game {
     g.fugitive = d.fugitive; g.units = d.units; g.traces = d.traces; g.annotations = d.annotations; g.searchAreas = d.searchAreas; g.items = d.items;
     g.board = new Map((d.board as BoardCard[]).map((c) => [c.id, c])); g.threads = d.threads; g.cleared = new Set(d.cleared); g.marked = new Set(d.marked);
     g.warrant = d.warrant; g.asked = d.asked; g.callActive = new Map(d.callActive); g.log = d.log; g.result = d.result; g.belief = d.belief;
+    // Hotseat: nach dem Laden nicht direkt die Sicht des Flüchtigen zeigen
+    if (g.mode === 'hotseat' && g.phase === 'fugitive') g.phase = 'handover-fugitive';
     g.aiWarrantRound = d.aiWarrantRound; g.chapterSnapshot = d.chapterSnapshot ?? (d.phase === 'chapter-intro' ? json : null); g.stats = d.stats; g.nextId = d.nextId;
     return g;
   }

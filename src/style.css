@@ -119,7 +119,7 @@ main { flex: 1; position: relative; min-height: 0; }
   background-color: #b08452;
   background-image: radial-gradient(rgba(60,35,10,.35) 1px, transparent 1.5px), radial-gradient(rgba(255,230,190,.18) 1px, transparent 1.5px);
   background-size: 7px 7px, 11px 11px; background-position: 0 0, 3px 5px; box-shadow: inset 0 0 120px rgba(40,20,0,.6); }
-.threads { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 2; overflow: visible; }
+.threads { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 100000; overflow: visible; }
 .thread { fill: none; stroke: #c1121f; stroke-width: 2.6; filter: drop-shadow(1px 3px 2px rgba(0,0,0,.45)); }
 .thread.temp { stroke-dasharray: 6 4; opacity: .85; }
 .thread.snap { animation: snap .9s ease-in forwards; }
