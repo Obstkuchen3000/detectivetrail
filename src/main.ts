@@ -10,6 +10,9 @@ import { computeScore, recordBest } from './game/score';
 import { nextHint } from './game/hints';
 import { Coach } from './ui/coach';
 import { RaidView } from './ui/raid';
+import { HEAT_LEVELS, PERKS } from './game/progress';
+import { activeProfile, awardGame, levelFromXp } from './game/profile';
+import { profileChip, profileScreen, welcomeScreen, xpBar } from './ui/profile';
 import { ROOM_ICON } from './game/building';
 import type { CityMap, MoveOption, Trace } from './game/types';
 import { MapView, routeColor, type Tool, type Viewer } from './map/MapView';
@@ -28,8 +31,15 @@ const loadMap = (cityId: string) => {
 };
 let destroyCurrent: (() => void) | null = null;
 const aiOpts: GameOptions = { police: 'normal', fugitive: 'normal' };
+let heat = 0;
+function heatChips(rerender: () => void) {
+  const lvl = levelFromXp(activeProfile()?.xp ?? 0);
+  return h('div', { class: 'quick ai' }, h('label', {}, 'Fahndungsdruck (mehr Erfahrung, gilt solo)'),
+    h('div', { class: 'chips' }, ...HEAT_LEVELS.map((hl) => h('button', { class: 'chip' + (heat === hl.level ? ' on' : ''), disabled: lvl < hl.minLevel, title: lvl < hl.minLevel ? `Ab Level ${hl.minLevel}` : hl.desc, onclick: () => { heat = hl.level; rerender(); } }, `${'🔥'.repeat(hl.level)}${hl.level ? ' ' : ''}${hl.name}${lvl < hl.minLevel ? ' 🔒' : ''} · EP ×${hl.xpMul}`))),
+    h('small', {}, HEAT_LEVELS[heat].desc));
+}
 function aiChips(rerender: () => void) {
-  const row = (label: string, key: keyof GameOptions) => h('div', { class: 'ai-row' }, h('small', {}, label),
+  const row = (label: string, key: 'police' | 'fugitive') => h('div', { class: 'ai-row' }, h('small', {}, label),
     h('div', { class: 'chips' }, ...(['leicht', 'normal', 'schwer'] as AiLevel[]).map((l) => h('button', { class: 'chip' + (aiOpts[key] === l ? ' on' : ''), onclick: () => { aiOpts[key] = l; rerender(); } }, l))));
   return h('div', { class: 'quick ai' }, h('label', {}, 'Computergegner'), row('KI-Flüchtiger (wenn Sie ermitteln)', 'fugitive'), row('KI-Polizei (wenn Sie fliehen)', 'police'));
 }
@@ -43,8 +53,11 @@ const back = (fn: () => void) => h('button', { class: 'btn ghost', onclick: () =
 const muteBtn = () => { const b = h('button', { class: 'btn ghost small', title: 'Ton an/aus', onclick: () => { setMuted(!isMuted()); b.textContent = isMuted() ? '🔇' : '🔊'; play('click'); } }, isMuted() ? '🔇' : '🔊'); return b; };
 
 function title() {
+  const prof = activeProfile();
+  if (!prof) { destroyCurrent?.(); destroyCurrent = null; welcomeScreen(app, () => title()); return; }
   const auto = readSave('auto');
   screen(
+    profileChip(prof, () => { play('click'); destroyCurrent?.(); destroyCurrent = null; profileScreen(app, title); }),
     h('div', { class: 'logo' }, h('span', {}, 'DETECTIVE'), h('span', { class: 'accent' }, 'TRAIL')),
     h('p', { class: 'tag' }, 'Lagezentrum · Pinnwand · Verhörraum'),
     h('div', { class: 'col' },
@@ -105,6 +118,7 @@ function roleMenu(start: (mode: GameMode) => void, onBack: () => void) {
       h('button', { class: 'tile', onclick: () => start('hotseat') }, h('div', { class: 'tile-title' }, '👥 2 Spieler'), h('div', { class: 'tile-sub' }, 'An einem Gerät: Eine Person ermittelt, die andere flieht verdeckt.')),
     ),
     aiChips(rerender),
+    heatChips(rerender),
     back(onBack),
   );
 }
@@ -128,6 +142,7 @@ function quickMenu(cityId: string) {
       best ? h('small', { class: 'best' }, `🏆 Ihr Bestwert als Ermittler: ${best} Punkte`) : null,
     ),
     aiChips(() => render()),
+    heatChips(() => render()),
     h('div', { class: 'grid three' },
       h('button', { class: 'tile', onclick: () => startNew(cityId, quickId({ seed, difficulty, escape }), 'solo') }, h('div', { class: 'tile-title' }, '🕵️ Ermitteln')),
       h('button', { class: 'tile', onclick: () => startNew(cityId, quickId({ seed, difficulty, escape }), 'fugitive') }, h('div', { class: 'tile-title' }, '🦊 Fliehen')),
@@ -165,7 +180,9 @@ async function startNew(cityId: string, caseId: string, mode: GameMode) {
   screen(h('p', { class: 'tag' }, 'Lade Karte…'));
   const map = await loadMap(cityId);
   const def = resolveCase(caseId, map)!;
-  startGame(new Game(map, def, mode, undefined, { ...aiOpts }));
+  const prof = activeProfile();
+  const side = mode === 'solo' ? 'det' as const : mode === 'fugitive' ? 'fug' as const : null;
+  startGame(new Game(map, def, mode, undefined, { ...aiOpts, talents: prof?.talents ?? {}, side, heat: side && caseId !== TUTORIAL.id ? heat : 0 }));
 }
 
 function bestOf(key: string): number { try { return JSON.parse(localStorage.getItem('dt-best-v1') ?? '{}')[key] ?? 0; } catch { return 0; } }
@@ -250,6 +267,8 @@ function rules() {
     h('p', {}, 'In manchen Akten kündigt der Täter sein Ziel als Rätsel an. Lila Ringe markieren die möglichen Ziele. Warten Sie mit einer Einheit am richtigen Ort, dann ertappen Sie ihn auf frischer Tat, auch ohne Haftbefehl.'),
     h('h4', {}, 'Tipps & Wertung'),
     h('p', {}, '💡 gibt einen Tipp und kostet 40 Punkte. Am Ende bekommen Sie Punkte und einen Rang. Gesparte Runden und Erkenntnisse zählen positiv, gerissene Fäden, falsche Haftbefehle und Tipps negativ.'),
+    h('h4', {}, 'Profil, Level & Talente'),
+    h('p', {}, 'Jede Partie bringt Erfahrung (EP) für Ihr Profil. Pro Level gibt es einen Talentpunkt für die Talentbäume der Ermittler und der Flüchtigen. Zu Beginn jedes Akts wählen Sie außerdem eine von drei zufälligen Einsatzkarten (als Flüchtiger: Kniffe), die bis zum Ende der Partie gelten. Fahndungsdruck macht den Gegner stärker und bringt mehr EP. Talente, Karten und Fahndungsdruck gelten nur im Solo-Spiel.'),
     h('h4', {}, 'Als Flüchtiger'),
     h('p', {}, 'Die KI-Polizei sieht nur, was auch ein menschlicher Ermittler sehen würde, also Ihre Spuren. Nach einigen Runden hat sie Ihren Namen und darf Sie verhaften. Ihre Hilfsmittel: 🚲 Leihrad (zwei Schritte weit, hinterlässt eine Ausleih-Spur), 🎭 Verkleidung (zwei Runden lang erkennen Sie weder Kameras noch Hubschrauber) und 🧭 falsche Fährte (legt eine gefälschte U-Bahn-Spur).'),
   ));
@@ -360,7 +379,7 @@ function startGame(game: Game) {
   function renderTimeline() {
     if (game.phase === 'chapter-intro' || game.round < 2) { fill(timeline); timeline.style.display = 'none'; return; }
     timeline.style.display = '';
-    const max = Math.min(game.round, game.chapter.maxRounds);
+    const max = Math.min(game.round, game.maxRounds);
     if (!tl.active) tl.upTo = max;
     const slider = h('input', { type: 'range', min: 0, max, value: tl.upTo }) as HTMLInputElement;
     slider.addEventListener('input', () => { tl.upTo = +slider.value; tl.active = true; lab.textContent = labelText(); });
@@ -372,7 +391,7 @@ function startGame(game: Game) {
   }
 
   function showHint() {
-    if (!confirm('Einen Tipp ansehen? Das kostet 40 Punkte in der Wertung.')) return;
+    if (!confirm(`Einen Tipp ansehen? Das kostet ${game.mods.hintCost} Punkte in der Wertung.`)) return;
     const text = nextHint(game);
     play('found');
     modal(h('div', { class: 'ask' }, h('h3', {}, '💡 Tipp'), h('p', {}, text), h('small', { class: 'hint' }, `Bisher benutzte Tipps: ${game.stats.hints}`)));
@@ -384,6 +403,9 @@ function startGame(game: Game) {
       h('h3', {}, `Akt ${game.chapterIdx + 1}/${def.chapters.length} · ${ch.title}`),
       h('p', {}, viewer() === 'fugitive' ? ch.fugitiveIntro : ch.objective),
       ch.ambush ? h('p', { class: 'warnline amb' }, viewer() === 'fugitive' ? `🎯 Dein Ziel: ${def.places[ch.ambush.target].name}, ab Runde ${ch.ambush.fromRound}` : `🎯 Mögliche Ziele (ab Runde ${ch.ambush.fromRound}): ` + ch.ambush.candidates.map((p) => def.places[p].name).join(', ')) : null,
+      game.perks.length ? h('p', { class: 'perk-line' }, game.perks.map((id) => PERKS.find((x) => x.id === id)!.icon).join(' '), ' ', h('small', {}, game.perks.map((id) => PERKS.find((x) => x.id === id)!.name).join(', '))) : null,
+      viewer() === 'detective' && game.charges.informant > 0 && game.phase === 'detective' ? h('button', { class: 'btn small', onclick: () => game.useInformant() }, `🕵️ Informant anrufen (${game.charges.informant}×)`) : null,
+      viewer() === 'detective' && (game.charges.freeHeli || game.charges.freeObserve) ? h('small', { class: 'okline' }, [game.charges.freeHeli ? `🚁 ${game.charges.freeHeli}× gratis` : '', game.charges.freeObserve ? `👁 ${game.charges.freeObserve}× gratis` : ''].filter(Boolean).join(' · ')) : null,
       ch.escape ? h('p', { class: 'warnline' }, `⇲ Fluchtpunkte ${game.round >= ch.escape.fromRound ? 'OFFEN' : 'ab Runde ' + ch.escape.fromRound}: ` + ch.escape.places.map((p) => def.places[p].name).join(', ')) : null,
     );
   }
@@ -396,7 +418,7 @@ function startGame(game: Game) {
         h('div', { class: 'panel fugitive' },
           h('h3', {}, '🦊 ' + game.culprit.name),
           h('p', {}, h('b', {}, 'Standort: '), here.name),
-          h('p', {}, `🚕 Taxifahrten: ${game.fugitive.taxis} · Runde ${game.round}/${game.chapter.maxRounds}`),
+          h('p', {}, `🚕 Taxifahrten: ${game.fugitive.taxis} · Runde ${game.round}/${game.maxRounds}`),
           h('p', { class: game.warrant ? 'warnline' : '' }, game.warrant ? '⚠️ Es gibt einen Haftbefehl gegen dich. Jede Einheit kann dich festnehmen, und die Kameras erkennen dich öfter.' : 'Noch kennt die Polizei deinen Namen nicht.'),
           game.fugitive.movesLeft > 1 ? h('p', { class: 'warnline' }, `Vorsprung: noch ${game.fugitive.movesLeft} Züge`) : null,
           h('div', { class: 'legend' }, h('span', { class: 'lg foot' }, 'zu Fuß'), h('span', { class: 'lg bike' }, 'Rad'), h('span', { class: 'lg sub' }, 'U-Bahn'), h('span', { class: 'lg taxi' }, 'Taxi')),
@@ -465,8 +487,8 @@ function startGame(game: Game) {
     fill(top,
       h('div', { class: 'brand' }, 'DT', h('small', {}, def.title)),
       h('div', { class: 'stat' }, h('small', {}, 'AKT'), h('b', {}, `${game.chapterIdx + 1}/${def.chapters.length}`)),
-      h('div', { class: 'stat' }, h('small', {}, 'RUNDE'), h('b', {}, `${Math.min(game.round, game.chapter.maxRounds)}/${game.chapter.maxRounds}`)),
-      det ? h('div', { class: 'stat' }, h('small', {}, 'EINSATZPUNKTE'), h('b', { class: 'pips' }, ...[0, 1].map((i) => h('i', { class: i < game.ap ? 'on' : '' })))) : null,
+      h('div', { class: 'stat' }, h('small', {}, 'RUNDE'), h('b', {}, `${Math.min(game.round, game.maxRounds)}/${game.maxRounds}`)),
+      det ? h('div', { class: 'stat' }, h('small', {}, 'EINSATZPUNKTE'), h('b', { class: 'pips' }, ...Array.from({ length: Math.max(2, game.ap) }, (_, i) => h('i', { class: i < game.ap ? 'on' : '' })))) : null,
       h('div', { class: 'stat' }, h('small', {}, 'HAFTBEFEHL'), h('b', { class: game.warrant ? 'ok' : 'warn' }, game.warrant ? 'liegt vor' : 'fehlt')),
       det ? h('nav', { class: 'tabs' },
         h('button', { class: view === 'map' ? 'on' : '', onclick: () => switchView('map') }, '🗺 Lagekarte'),
@@ -494,7 +516,12 @@ function startGame(game: Game) {
         ...ch.intro.map((p) => h('p', {}, p)),
         h('p', { class: 'objective-line' }, '🎯 ' + (fugMode ? ch.fugitiveIntro : ch.objective)),
         game.mode === 'hotseat' ? h('p', { class: 'warn' }, `Zwei Spieler: Die fliehende Person spielt in diesem Akt ${game.culprit.name}. Vor jedem Zug erscheint ein Übergabe-Bildschirm.`) : null,
-        h('div', { class: 'row center' }, h('button', { class: 'btn big', onclick: () => { game.beginChapter(); focusStart(); } }, fugMode ? 'Flucht beginnen' : 'Ermittlung aufnehmen')),
+        game.draft.length ? h('div', { class: 'draft' },
+          h('div', { class: 'classified' }, fugMode ? 'WÄHLE EINEN KNIFF' : 'WÄHLEN SIE EINE EINSATZKARTE'),
+          h('div', { class: 'draft-cards' }, ...game.draft.map((id) => { const pk = PERKS.find((x) => x.id === id)!; return h('button', { class: 'perk', onclick: () => game.pickPerk(id) }, h('span', { class: 'picon' }, pk.icon), h('b', {}, pk.name), h('small', {}, pk.desc)); })),
+          h('button', { class: 'link', onclick: () => game.skipDraft() }, 'ohne Karte weiter')) : null,
+        game.perks.length ? h('p', { class: 'perk-line' }, 'Im Gepäck: ' + game.perks.map((id) => { const pk = PERKS.find((x) => x.id === id)!; return pk.icon + ' ' + pk.name; }).join(' · ')) : null,
+        h('div', { class: 'row center' }, h('button', { class: 'btn big', disabled: game.draft.length > 0, onclick: () => { game.beginChapter(); focusStart(); } }, fugMode ? 'Flucht beginnen' : 'Ermittlung aufnehmen')),
       )));
     } else if (game.phase === 'handover-fugitive') {
       overlay.append(h('div', { class: 'handover' }, h('div', {},
@@ -507,6 +534,7 @@ function startGame(game: Game) {
         h('p', {}, 'Der Flüchtige hat gezogen. Gib das Gerät an die Ermittler zurück.'),
         h('button', { class: 'btn big', onclick: () => game.beginDetectiveTurn() }, 'Weiter ermitteln'))));
     } else if (game.phase === 'over' && game.result && !reveal) {
+      document.querySelector('.toasts')?.replaceChildren();
       const r = game.result;
       const detWin = r.winner === 'detectives';
       const playerWon = fugMode ? !detWin : detWin;
@@ -515,10 +543,29 @@ function startGame(game: Game) {
       if (r.final || !detWin) {
         const sc = computeScore(game);
         const best = game.mode !== 'hotseat' ? recordBest(def.id, game.mode, sc) : null;
+        let xpBox: HTMLElement | null = null;
+        const prof = activeProfile();
+        if (prof && game.mode !== 'hotseat') {
+          if (!game.xpAwarded) {
+            game.xpAwarded = true;
+            const solved = detWin && r.final && !fugMode, escaped = !detWin && fugMode;
+            const mul = HEAT_LEVELS[game.opts.heat ?? 0].xpMul;
+            const base = def.id === TUTORIAL.id ? 150 : sc.points / 3 + game.stats.arrests * (fugMode ? 0 : 40) + (solved || escaped ? 150 : 0) + (fugMode ? game.stats.roundsUsed * 6 : 0) + 20;
+            const res = awardGame(prof, { xp: base * mul, solved, escaped, caught: fugMode && detWin, chapters: fugMode ? game.chapterIdx : game.stats.arrests, score: sc.points });
+            (game as unknown as { _xp: typeof res })._xp = res;
+          }
+          const res = (game as unknown as { _xp?: { before: number; after: number; gained: number } })._xp;
+          const p2 = activeProfile()!;
+          xpBox = h('div', { class: 'xpbox' },
+            h('div', { class: 'row' }, h('b', {}, `+${res?.gained ?? 0} EP`), h('span', { class: 'grow' }), h('span', {}, `${p2.name} · Level ${levelFromXp(p2.xp)}`)),
+            xpBar(p2),
+            res && res.after > res.before ? h('div', { class: 'levelup' }, `⬆ Level ${res.after}! ${res.after - res.before} neue${res.after - res.before > 1 ? '' : 'r'} Talentpunkt${res.after - res.before > 1 ? 'e' : ''}. Verteilen Sie ihn im Profil.`) : null);
+        }
         scoreBox = h('div', { class: 'scorebox' },
           h('div', { class: 'rank' }, '★'.repeat(sc.stars + 1) + '☆'.repeat(4 - sc.stars), h('b', {}, sc.rank)),
           h('div', { class: 'points' }, `${sc.points} Punkte`, best ? h('small', {}, best.isNew ? ' · 🏆 neuer Bestwert!' : ` · Bestwert ${best.best}`) : null),
-          h('table', {}, ...sc.lines.filter(([, v]) => v !== 0).map(([k, v]) => h('tr', {}, h('td', {}, k), h('td', { class: v < 0 ? 'neg' : 'pos' }, (v > 0 ? '+' : '') + v)))));
+          h('table', {}, ...sc.lines.filter(([, v]) => v !== 0).map(([k, v]) => h('tr', {}, h('td', {}, k), h('td', { class: v < 0 ? 'neg' : 'pos' }, (v > 0 ? '+' : '') + v)))),
+          xpBox);
       }
       const stats = h('p', { class: 'hint' }, `Erkenntnisse: ${[...game.board.keys()].filter((k) => game.cards[k].kind === 'erkenntnis').length} · Fäden: ${game.stats.threads} (gerissen: ${game.stats.wrongThreads}) · Falsche Haftbefehle: ${game.stats.wrongWarrants}`);
       const buttons: (HTMLElement | null)[] = [];

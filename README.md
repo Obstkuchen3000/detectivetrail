@@ -74,6 +74,14 @@ In manchen Akten öffnen ab einer bestimmten Runde **Fluchtpunkte** wie Heliport
 - 🚲 Leihrad (zwei Schritte, Ausleih-Spur), 🎭 Verkleidung (zwei Runden unsichtbar für Kameras und Hubschrauber) und 🧭 falsche Fährte (gefälschte U-Bahn-Spur)
 - Getrennt einstellbare Stärke von KI-Flüchtigem und KI-Polizei (leicht, normal, schwer)
 
+### Profil, Level & Roguelite-Fortschritt
+
+- **Profile** (lokal im Browser) mit Level, Erfahrung (EP) und Statistik; mehrere Profile pro Gerät; **Übertragungscode**, um ein Profil auf ein anderes Gerät mitzunehmen
+- **Talentbäume** für Ermittler (z. B. Doppelschicht, Kameranetz, Schnelle Streifen, Einheit Echo) und Flüchtige (z. B. Unauffällig, Meister der Maske, Funkloch, Vorsprung): ein Punkt pro Level, manche Talente erst ab einem bestimmten Level
+- **Einsatzkarten / Kniffe:** Zu Beginn jedes Akts eine von drei zufälligen Karten wählen (Informant, Hubschrauber-Bereitschaft, Störsender, Perücke …), die bis zum Ende der Partie gelten
+- **Fahndungsdruck** 0 bis 3 (ab Level 3/6/10): stärkere Gegner, weniger Runden, mehr EP
+- Talente, Karten und Fahndungsdruck gelten nur solo; im 2-Spieler-Modus bleibt es fair
+
 ### Eigene Fälle
 
 Fälle lassen sich als JSON-Datei schreiben und im Spiel unter **🛠 Eigene Fälle** laden. Dabei werden sie automatisch geprüft.

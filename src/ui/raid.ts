@@ -1,5 +1,5 @@
 import type { Game } from '../game/game';
-import { RAID_ACTIONS, RAID_LOOK_SECONDS } from '../game/game';
+import { RAID_ACTIONS } from '../game/game';
 import { ROOM_ICON } from '../game/building';
 import { fill, h, toast } from './dom';
 import { roomSvg } from './roomart';
@@ -68,10 +68,10 @@ export class RaidView {
       else if (hit === 'clue') { (e.target as Element).closest('[data-hit]')!.remove(); g.raidClue(); toast('👣 Spuren entdeckt: Hier war vor Kurzem jemand!', 'good'); }
       else { R.openedAt -= 3000; toast('Nichts Auffälliges. Das kostet 3 Sekunden.', 'info'); }
     });
-    const left = Math.max(0, RAID_LOOK_SECONDS - Math.floor((Date.now() - R.openedAt) / 1000));
+    const left = Math.max(0, g.raidSeconds() - Math.floor((Date.now() - R.openedAt) / 1000));
     const clock = h('b', { class: 'clock' }, `${left}s`);
     this.timer = window.setInterval(() => {
-      const l = Math.max(0, RAID_LOOK_SECONDS - Math.floor((Date.now() - R.openedAt) / 1000));
+      const l = Math.max(0, g.raidSeconds() - Math.floor((Date.now() - R.openedAt) / 1000));
       clock.textContent = `${l}s`;
       if (l <= 0) { window.clearInterval(this.timer); toast('Die Zeit ist um, das Team muss weiter.', 'info'); g.raidLeaveRoom(); }
     }, 250);
