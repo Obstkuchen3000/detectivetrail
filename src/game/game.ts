@@ -1,5 +1,6 @@
 import type { CaseDef, CardDef, Chapter, Contact } from '../cases/types';
-import type { Annotation, BoardCard, CityMap, HiddenItem, LogEntry, MoveOption, SearchArea, Trace, Unit } from './types';
+import type { Annotation, BoardCard, CityMap, HiddenItem, HiddenState, LogEntry, MoveOption, RaidState, SearchArea, Trace, Unit } from './types';
+import { makeBuilding, roomNeighbors, type Building } from './building';
 import { CityGraph, TAXI_MIN, UNIT_REACH } from './graph';
 import { dist, project } from './geo';
 import { Rng } from './rng';
@@ -15,7 +16,8 @@ export const AP_PER_ROUND = 2;
 export type AiLevel = 'leicht' | 'normal' | 'schwer';
 export interface GameOptions { police: AiLevel; fugitive: AiLevel }
 export const HELI_RADIUS = 500;
-export const ACTION_COST = { search: 1, roadblock: 1, observe: 1, heli: 2 } as const;
+export const ACTION_COST = { search: 1, roadblock: 1, observe: 1, heli: 2, raid: 1 } as const;
+export const RAID_TURNS = 4, RAID_ACTIONS = 3, RAID_LOOK_SECONDS = 25;
 export const SEARCH_RADIUS = 220;
 const UNIT_COLORS = ['#38bdf8', '#a3e635', '#f472b6', '#fbbf24'];
 
@@ -29,7 +31,10 @@ export class Game {
   round = 1;
   phase: Phase = 'chapter-intro';
   ap = AP_PER_ROUND;
-  fugitive = { node: 0, taxis: 3, path: [] as FugitiveStep[], movesLeft: 1, disguise: 0, gadgets: { disguise: 1, decoy: 1 }, decoyArmed: false };
+  fugitive = { node: 0, taxis: 3, path: [] as FugitiveStep[], movesLeft: 1, disguise: 0, gadgets: { disguise: 1, decoy: 1 }, decoyArmed: false, hidden: null as HiddenState | null };
+  raid: RaidState | null = null;
+  raidedThisRound: number[] = [];
+  private buildingCache = new Map<number, Building>();
   roadblocks: { node: number; round: number }[] = [];
   observed: number[] = [];
   resolved: string[] = [];
@@ -52,7 +57,7 @@ export class Game {
   belief: number[] = [];
   aiWarrantRound = 99;
   chapterSnapshot: string | null = null;
-  stats = { arrests: 0, wrongWarrants: 0, threads: 0, wrongThreads: 0, hints: 0, wrongPresent: 0, roundsUsed: 0, tracesLeft: 0, startedAt: Date.now() };
+  stats = { arrests: 0, wrongWarrants: 0, threads: 0, wrongThreads: 0, hints: 0, wrongPresent: 0, roundsUsed: 0, tracesLeft: 0, raids: 0, buildingCaptures: 0, startedAt: Date.now() };
   cards: Record<string, CardDef>;
   lastEvent: { text: string; kind: 'good' | 'bad' | 'info' } | null = null;
   sfx: (s: Sfx) => void = () => {};
@@ -108,8 +113,8 @@ export class Game {
       const sn = this.graph.nodes[start];
       u.node = this.graph.nearest(sn.x + 1400, sn.y + 900, (k) => !occ.has(k) && this.graph.nodes[k].kind === 'station');
     }
-    this.fugitive = { node: start, taxis: ch.taxis, path: [{ round: 0, node: start, mode: 'stay' }], movesLeft: 1 + (ch.headStart ?? 0), disguise: 0, gadgets: { disguise: ch.tutorial ? 0 : 1, decoy: ch.tutorial ? 0 : 1 }, decoyArmed: false };
-    this.roadblocks = []; this.observed = [];
+    this.fugitive = { node: start, taxis: ch.taxis, path: [{ round: 0, node: start, mode: 'stay' }], movesLeft: 1 + (ch.headStart ?? 0), disguise: 0, gadgets: { disguise: ch.tutorial ? 0 : 1, decoy: ch.tutorial ? 0 : 1 }, decoyArmed: false, hidden: null };
+    this.roadblocks = []; this.observed = []; this.raid = null; this.raidedThisRound = [];
     const sn = this.graph.nodes[start];
     this.addTrace({ round: 0, kind: 'start', x: sn.x, y: sn.y, text: (i === 0 ? 'Tatort: ' : 'Ausgangspunkt: ') + sn.name, tag: i === 0 ? 'TATORT' : 'START' });
     for (const p of ch.searchAt ?? [ch.start]) { const n = this.graph.nodes[this.placeNode(p)]; this.searchAreas.push({ x: n.x, y: n.y, r: 160, round: 0 }); }
@@ -155,7 +160,31 @@ export class Game {
   }
   fugitiveOptions() {
     const o = this.graph.fugitiveOptions(this.fugitive.node, this.fugitive.taxis, this.blockedForFugitive());
-    return this.chapter.tutorial ? o.filter((x) => x.mode === 'foot' || x.mode === 'stay') : o;
+    if (this.chapter.tutorial) return o.filter((x) => x.mode === 'foot' || x.mode === 'stay');
+    // Verschanzen im Gebäude am aktuellen Knoten (bzw. darin bleiben)
+    const filtered = this.fugitive.hidden ? o.filter((x) => x.mode !== 'stay') : o;
+    filtered.push({ to: this.fugitive.node, mode: 'hide' });
+    return filtered;
+  }
+
+  // ---------------- Gebäude ----------------
+  buildingAt(node: number): Building {
+    let b = this.buildingCache.get(node);
+    if (!b) {
+      const key = [...this.graph.placeIndex].find(([, n]) => n === node)?.[0];
+      const ov = key ? this.def.buildings?.[key] : undefined;
+      b = makeBuilding(this.seed, node, this.graph.nodes[node].name, ov, this.graph.nodes[node].kind === 'poi');
+      this.buildingCache.set(node, b);
+    }
+    return b;
+  }
+  /** KI-Wahl eines Verstecks: eher oben, nicht im Treppenhaus */
+  pickHideRoom(b: Building): number {
+    const rooms = b.rooms.filter((r) => r.kind !== 'treppe');
+    const w = rooms.map((r) => 1 + r.floor + (r.exit ? 1.5 : 0));
+    let x = this.rnd() * w.reduce((a, c) => a + c, 0);
+    for (let i = 0; i < rooms.length; i++) { x -= w[i]; if (x <= 0) return rooms[i].id; }
+    return rooms[rooms.length - 1].id;
   }
   activeRoadblocks() { return this.roadblocks.filter((r) => r.round >= this.round - (this.phase === 'detective' ? 0 : 1)); }
 
@@ -175,6 +204,13 @@ export class Game {
     const G = this.graph; const from = this.fugitive.node; const to = opt.to;
     const A = G.nodes[from], B = G.nodes[to];
     if (opt.mode === 'taxi' && this.fugitive.taxis <= 0) return;
+    const wasHidden = this.fugitive.hidden;
+    if (opt.mode !== 'hide' && wasHidden) {
+      this.fugitive.hidden = null;
+      if (this.units.some((u) => u.node === from) && this.rnd() < 0.6)
+        this.addTrace({ round: this.round, kind: 'sighting', x: A.x, y: A.y, node: from, text: `Jemand verlässt hastig ${this.buildingAt(from).name}` });
+    }
+    if (opt.mode === 'hide') return this.applyHide(opt);
     this.fugitive.node = to;
     this.fugitive.path.push({ round: this.round, node: to, mode: opt.mode, route: opt.route });
     const r = this.round;
@@ -237,6 +273,11 @@ export class Game {
       this.result = { winner: 'fugitive', reason: `${this.culprit.name} hat sich über ${B.name} abgesetzt. Die Spur verliert sich.`, final: true };
       this.phase = 'over'; this.sfx('fail'); this.emit(); return;
     }
+    this.afterFugitiveMove(done, fresh);
+  }
+
+  private afterFugitiveMove(done: boolean, fresh: Trace[]) {
+    const r = this.round;
     if (!done) { this.emit(); return; }
     for (const t of this.chapter.timed) if (t.round <= r && (!t.needs || this.board.has(t.needs)) && !this.board.has(t.card)) { this.placeCard(t.card); this.notify('Neue Unterlagen: ' + this.cards[t.card].title, 'info'); }
     if (this.mode === 'fugitive') {
@@ -250,6 +291,153 @@ export class Game {
     if (fresh.length) this.sfx('trace');
     this.emit();
   }
+
+  private applyHide(opt: MoveOption) {
+    const node = this.fugitive.node; const b = this.buildingAt(node); const r = this.round;
+    const N = this.graph.nodes[node];
+    const fresh: Trace[] = [];
+    if (!this.fugitive.hidden) {
+      this.fugitive.hidden = { node, room: opt.room ?? this.pickHideRoom(b), rounds: 0, trail: [] };
+      if (this.rnd() < 0.5) {
+        this.addTrace({ round: r, kind: 'building', x: N.x, y: N.y, node, text: `Zeuge: Jemand passend zur Beschreibung ging ins ${b.name}` });
+        fresh.push(this.traces[this.traces.length - 1]);
+      }
+    } else {
+      this.fugitive.hidden.rounds++;
+      if (opt.room !== undefined) this.fugitive.hidden.room = opt.room;
+    }
+    this.fugitive.path.push({ round: r, node, mode: 'hide' });
+    this.fugitive.movesLeft--;
+    const done = this.fugitive.movesLeft <= 0;
+    if (done && this.fugitive.disguise > 0) this.fugitive.disguise--;
+    if (done && this.chapter.pingRounds.includes(r)) this.addLog('Funkzelle: Das gesuchte Handy hat kein Netz, vielleicht abgeschirmt.', 'info');
+    this.stats.tracesLeft += fresh.length;
+    updateBeliefAfterMove(this, fresh);
+    this.sfx('move');
+    this.afterFugitiveMove(done, fresh);
+  }
+
+  // ---------------- Durchsuchung ----------------
+  canRaid(node: number) {
+    return this.phase === 'detective' && !!this.warrant && !this.raid && this.ap >= ACTION_COST.raid && !this.raidedThisRound.includes(node) && this.units.some((u) => u.node === node);
+  }
+  startRaid(node: number) {
+    if (!this.canRaid(node)) return false;
+    this.ap -= ACTION_COST.raid;
+    this.raidedThisRound.push(node);
+    this.stats.raids++;
+    const b = this.buildingAt(node);
+    this.raid = { node, turn: 1, maxTurns: RAID_TURNS, actions: RAID_ACTIONS, searched: [], sealed: [], guarded: [], asked: [], log: [`Zugriffsteam betritt ${b.name}. Alle Ausgänge sind vorerst offen.`], open: null, openedAt: 0, clues: [], ended: null };
+    this.addLog(`Durchsuchung gestartet: ${b.name}`, 'info');
+    this.sfx('radio'); this.emit();
+    return true;
+  }
+  fugitiveInRaid() { return !!this.raid && !!this.fugitive.hidden && this.fugitive.hidden.node === this.raid.node; }
+  raidSearch(room: number) {
+    const R = this.raid; if (!R || R.ended || R.actions <= 0 || R.open !== null) return false;
+    R.actions--; R.open = room; R.openedAt = Date.now();
+    this.sfx('click'); this.emit(); return true;
+  }
+  /** Spieler hat die Person im Raumbild entdeckt */
+  raidCatch() {
+    const R = this.raid; if (!R || R.open === null || !this.fugitiveInRaid() || this.fugitive.hidden!.room !== R.open) return;
+    const b = this.buildingAt(R.node);
+    R.log.unshift(`Zugriff in ${b.rooms[R.open].name}!`); R.ended = 'caught'; R.open = null;
+    this.stats.arrests++; this.stats.buildingCaptures++; this.stats.roundsUsed += this.round;
+    this.fugitive.hidden = null;
+    this.result = { winner: 'detectives', reason: `Das Zugriffsteam hat ${this.culprit.name} in ${b.name} aufgespürt und festgenommen.`, final: this.isLastChapter };
+    this.sfx('siren'); this.emit();
+  }
+  raidClue() {
+    const R = this.raid; if (!R || R.open === null || R.clues.includes(R.open)) return;
+    R.clues.push(R.open);
+    const t = this.fugitive.hidden?.trail.filter((x) => x.room === R.open).pop();
+    R.log.unshift(`Spuren in ${this.buildingAt(R.node).rooms[R.open].name}: Hier war vor Kurzem jemand${t ? ` (Durchgang ${t.turn})` : ''}!`);
+    this.sfx('found'); this.emit();
+  }
+  raidLeaveRoom() {
+    const R = this.raid; if (!R || R.open === null) return;
+    const room = R.open; R.open = null;
+    R.searched.push({ room, turn: R.turn, result: R.clues.includes(room) ? 'spuren' : 'leer' });
+    R.log.unshift(`${this.buildingAt(R.node).rooms[room].name}: ${R.clues.includes(room) ? 'Spuren gefunden, aber niemand angetroffen.' : 'nichts gefunden.'}`);
+    this.emit();
+  }
+  /** Hinweis, ob in diesem Raum Spuren liegen (früher dort, jetzt nicht mehr) */
+  raidRoomHasTrail(room: number) {
+    const h = this.fugitive.hidden; if (!h || !this.raid || h.node !== this.raid.node) return false;
+    return h.room !== room && h.trail.some((t) => t.room === room);
+  }
+  raidSeal(floor: number) {
+    const R = this.raid; if (!R || R.ended || R.actions <= 0 || R.sealed.includes(floor)) return;
+    R.actions--; R.sealed.push(floor);
+    R.log.unshift(`${floor === 0 ? 'Erdgeschoss' : floor + '. Stock'} abgeriegelt: Dort kommt niemand mehr ins Treppenhaus.`);
+    this.sfx('radio'); this.emit();
+  }
+  raidGuard(room: number) {
+    const R = this.raid; if (!R || R.ended || R.actions <= 0 || R.guarded.includes(room)) return;
+    R.actions--; R.guarded.push(room);
+    R.log.unshift(`Ausgang gesichert: ${this.buildingAt(R.node).rooms[room].name}.`);
+    this.sfx('radio'); this.emit();
+  }
+  raidAsk(staffId: string): string | null {
+    const R = this.raid; if (!R || R.ended || R.actions <= 0 || R.asked.includes(staffId)) return null;
+    const b = this.buildingAt(R.node); const st = b.staff.find((s) => s.id === staffId)!;
+    R.actions--; R.asked.push(staffId);
+    let text: string;
+    if (!this.fugitiveInRaid()) text = this.rnd() < 0.85 ? 'Hier ist heute niemand Fremdes reingekommen, da bin ich mir sicher.' : 'Hm, ich glaube, vorhin lief jemand durchs Treppenhaus … oder war das ein Lieferant?';
+    else {
+      const room = b.rooms[this.fugitive.hidden!.room];
+      const idx = b.staff.indexOf(st);
+      if (idx === 0) { const f = this.rnd() < 0.8 ? room.floor : Math.max(0, Math.min(b.floors - 1, room.floor + (this.rnd() < 0.5 ? -1 : 1))); text = `Der Aufzug hat vorhin ${f === 0 ? 'im Erdgeschoss' : `im ${f}. Stock`} gehalten. Ein Mann ist ausgestiegen und hat sich umgesehen.`; }
+      else if (idx === 1) { const nb = roomNeighbors(b, room, []); const r2 = this.rnd() < 0.6 || !nb.length ? room : nb[Math.floor(this.rnd() * nb.length)]; text = `Bei „${r2.name}“ habe ich ein Geräusch gehört, als ob jemand eine Tür ganz leise zumacht.`; }
+      else text = room.exit ? `Die Tür ${room.exit} war nicht abgeschlossen, das ist sie sonst immer.` : `Jemand hat nach dem kürzesten Weg nach draußen gefragt, sehr nervös.`;
+    }
+    R.log.unshift(`${st.role} ${st.name}: „${text}“`);
+    this.sfx('answer'); this.emit();
+    return text;
+  }
+  /** Durchgang beenden: der Flüchtige bewegt sich im Gebäude */
+  raidEndTurn() {
+    const R = this.raid; if (!R || R.ended) return;
+    if (R.open !== null) this.raidLeaveRoom();
+    const b = this.buildingAt(R.node);
+    if (this.fugitiveInRaid()) {
+      const h = this.fugitive.hidden!;
+      const cur = b.rooms[h.room];
+      // Fluchtversuch über einen ungesicherten Ausgang
+      if (cur.exit && !R.guarded.includes(cur.id) && R.turn >= 2 && this.rnd() < 0.75) {
+        const occ = new Set(this.units.map((u) => u.node));
+        const out = this.graph.walk[R.node].filter((n) => !occ.has(n));
+        const dest = out.length ? out[Math.floor(this.rnd() * out.length)] : R.node;
+        this.fugitive.hidden = null; this.fugitive.node = dest;
+        this.fugitive.path.push({ round: this.round, node: dest, mode: 'foot' });
+        const D = this.graph.nodes[dest];
+        this.addTrace({ round: this.round, kind: 'sighting', x: D.x, y: D.y, node: dest, text: `Flucht ${cur.exit}! Gesehen bei ${D.name}` });
+        this.belief = [dest];
+        R.ended = 'escaped'; R.log.unshift(`Alarm! Die Zielperson ist ${cur.exit} entkommen und läuft Richtung ${D.name}.`);
+        this.notify(`Die Zielperson ist ${cur.exit} aus ${b.name} entkommen!`, 'bad'); this.sfx('fail');
+        this.emit(); return;
+      }
+      const opts = [cur, ...roomNeighbors(b, cur, R.sealed)];
+      let best = cur, bs = -Infinity;
+      for (const r of opts) {
+        let s = this.rnd() * 3;
+        if (R.searched.some((x) => x.room === r.id)) s += 3;           // schon durchsucht = sicherer
+        if (r.exit && !R.guarded.includes(r.id)) s += R.turn >= 1 ? 6 : 1;
+        if (r.exit && R.guarded.includes(r.id)) s -= 6;
+        if (r.kind === 'treppe') s -= 1.5;
+        if (r.id === cur.id) s += 1;
+        if (s > bs) { bs = s; best = r; }
+      }
+      if (best.id !== cur.id) { h.trail.push({ room: cur.id, turn: R.turn }); h.room = best.id; }
+    }
+    R.turn++; R.actions = RAID_ACTIONS;
+    if (R.turn > R.maxTurns) { R.ended = 'failed'; R.log.unshift('Die Durchsuchung wird ergebnislos abgebrochen. Das Team zieht sich zurück.'); }
+    else R.log.unshift(`— Durchgang ${R.turn} —`);
+    this.emit();
+  }
+  raidAbort() { const R = this.raid; if (!R || R.ended) return; R.open = null; R.ended = 'aborted'; R.log.unshift('Durchsuchung abgebrochen.'); this.emit(); }
+  raidClose() { if (!this.raid?.ended) return; const caught = this.raid.ended === 'caught'; this.raid = null; if (caught) this.phase = 'over'; this.emit(); }
 
   // ---------------- Ermittler ----------------
   unitReach(i: number): number[] {
@@ -271,7 +459,7 @@ export class Game {
   checkAllContacts() { for (const u of this.units) if (this.phase !== 'over') this.checkContact(u, true); }
 
   private checkContact(u: Unit, quiet = false) {
-    if (u.node !== this.fugitive.node || this.phase === 'over') return;
+    if (u.node !== this.fugitive.node || this.phase === 'over' || this.fugitive.hidden) return;
     const nd = this.graph.nodes[u.node];
     if (this.warrant === this.chapter.culprit) {
       this.stats.arrests++;
@@ -476,6 +664,7 @@ export class Game {
     this.units.forEach((u) => (u.moved = false));
     this.board.forEach((c) => (c.isNew = false));
     this.fugitive.movesLeft = 1;
+    this.raidedThisRound = []; this.raid = null;
     this.toFugitivePhase();
   }
 
@@ -496,7 +685,7 @@ export class Game {
       fugitive: this.fugitive, units: this.units, traces: this.traces, annotations: this.annotations, searchAreas: this.searchAreas, items: this.items,
       board: [...this.board.values()], threads: this.threads, cleared: [...this.cleared], marked: [...this.marked], warrant: this.warrant,
       asked: this.asked, callActive: [...this.callActive], log: this.log, result: this.result, belief: this.belief, aiWarrantRound: this.aiWarrantRound,
-      chapterSnapshot: this.chapterSnapshot, stats: this.stats, nextId: this.nextId, roadblocks: this.roadblocks, observed: this.observed, resolved: this.resolved, opts: this.opts,
+      chapterSnapshot: this.chapterSnapshot, stats: this.stats, nextId: this.nextId, roadblocks: this.roadblocks, observed: this.observed, resolved: this.resolved, opts: this.opts, raid: this.raid, raidedThisRound: this.raidedThisRound,
     });
   }
 
@@ -511,7 +700,9 @@ export class Game {
     if (g.mode === 'hotseat' && g.phase === 'fugitive') g.phase = 'handover-fugitive';
     g.aiWarrantRound = d.aiWarrantRound; g.chapterSnapshot = d.chapterSnapshot ?? (d.phase === 'chapter-intro' ? json : null); g.stats = { ...g.stats, ...d.stats }; g.nextId = d.nextId;
     g.roadblocks = d.roadblocks ?? []; g.observed = d.observed ?? []; g.resolved = d.resolved ?? [];
-    g.fugitive = { disguise: 0, gadgets: { disguise: 0, decoy: 0 }, decoyArmed: false, ...d.fugitive };
+    g.fugitive = { disguise: 0, gadgets: { disguise: 0, decoy: 0 }, decoyArmed: false, hidden: null, ...d.fugitive };
+    g.raid = d.raid ?? null; g.raidedThisRound = d.raidedThisRound ?? [];
+    if (g.raid && g.raid.open !== null) g.raid.openedAt = Date.now();
     return g;
   }
 }

@@ -22,6 +22,7 @@ export function computeScore(g: Game): Score {
     if (solved) lines.push(['Fall gelöst', 300]);
     lines.push(['Gesparte Runden', Math.max(0, totalMax - g.stats.roundsUsed) * 20]);
     lines.push(['Erkenntnisse', insights * 25]);
+    lines.push(['Zugriff im Gebäude', g.stats.buildingCaptures * 100]);
     lines.push(['Gerissene Fäden', -g.stats.wrongThreads * 10]);
     lines.push(['Falsche Haftbefehle', -g.stats.wrongWarrants * 120]);
     lines.push(['Falsch vorgelegte Beweise', -g.stats.wrongPresent * 15]);

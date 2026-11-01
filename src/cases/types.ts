@@ -90,4 +90,6 @@ export interface CaseDef {
   dropItems: { icon: string; title: string }[];
   chapters: Chapter[];
   epilogue: string[];
+  /** feste Gebäude an Orten (sonst zufällig) */
+  buildings?: Record<string, { type: 'Hotel' | 'Bürohaus' | 'Parkhaus' | 'Kaufhaus' | 'Wohnhaus' | 'Lagerhaus'; name: string; floors?: number }>;
 }

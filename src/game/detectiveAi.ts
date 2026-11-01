@@ -22,6 +22,8 @@ export function updateBeliefAfterMove(g: Game, fresh: Trace[]) {
   } else {
     for (const v of prev) { next.add(v); for (const w of G.walk[v]) next.add(w); }
   }
+  const bld = fresh.find((t) => t.kind === 'building');
+  if (bld && bld.node !== undefined) next = new Set([bld.node]);
   const cctv = fresh.find((t) => t.kind === 'cctv');
   if (cctv && cctv.node !== undefined) next = new Set([cctv.node]);
   const ping = fresh.find((t) => t.kind === 'ping');
@@ -81,6 +83,15 @@ export function detectiveAiTurn(g: Game) {
     for (const b of g.belief) if (G.unitDist[best][b] <= 1) covered.add(b);
     if (best !== u.node) g.moveUnit(i, best);
   }
+  // Gebäude stürmen, wenn eine Einheit dort steht und es Indizien gibt
+  if (g.warrant && g.phase === 'detective') {
+    for (const u of g.units) {
+      const n = u.node;
+      const tip = g.traces.some((t) => t.kind === 'building' && t.node === n && t.round >= g.round - 3) || (g.belief.length <= 2 && g.belief.includes(n));
+      if (tip && g.canRaid(n)) { aiRaid(g, n); break; }
+    }
+    if (g.phase !== 'detective') return;
+  }
   // Straßensperre auf den wahrscheinlichsten Fluchtweg
   if (lvl !== 'leicht' && g.ap > 0 && g.phase === 'detective' && g.belief.length > 1) {
     const cnt = new Map<number, number>();
@@ -89,4 +100,36 @@ export function detectiveAiTurn(g: Game) {
     if (best) g.placeRoadblock(best[0]);
   }
   g.checkAllContacts();
+}
+
+/** KI-Polizei durchsucht ein Gebäude (Modus „Flüchtiger“) */
+function aiRaid(g: Game, node: number) {
+  g.startRaid(node);
+  const R = g.raid!; const b = g.buildingAt(node);
+  const findP = g.opts.police === 'leicht' ? 0.5 : g.opts.police === 'schwer' ? 0.85 : 0.7;
+  let hintFloor: number | null = null;
+  while (g.raid && !R.ended) {
+    while (R.actions > 0 && !R.ended) {
+      const staff = b.staff.find((s) => !R.asked.includes(s.id));
+      if (staff && R.turn <= 2) {
+        const t = g.raidAsk(staff.id) ?? '';
+        const m = /im (\d+)\. Stock|im Erdgeschoss/.exec(t);
+        if (m) hintFloor = m[1] ? +m[1] : 0;
+        continue;
+      }
+      const exit = b.rooms.find((r) => r.exit && !R.guarded.includes(r.id) && (hintFloor === null || Math.abs(r.floor - hintFloor) <= 1));
+      if (exit && R.guarded.length < 1) { g.raidGuard(exit.id); continue; }
+      const cand = b.rooms.filter((r) => r.kind !== 'treppe' && !R.searched.some((x) => x.room === r.id && x.turn === R.turn));
+      cand.sort((a, c) => (hintFloor === null ? 0 : Math.abs(a.floor - hintFloor) - Math.abs(c.floor - hintFloor)) + (g.rnd() - 0.5));
+      const room = cand[0]; if (!room) break;
+      g.raidSearch(room.id);
+      if (g.fugitiveInRaid() && g.fugitive.hidden!.room === room.id && g.rnd() < findP) { g.raidCatch(); break; }
+      if (g.raidRoomHasTrail(room.id)) g.raidClue();
+      g.raidLeaveRoom();
+    }
+    if (R.ended) break;
+    g.raidEndTurn();
+  }
+  g.addLog(`Polizei-Durchsuchung in ${b.name}: ${R.log.slice(0, 3).reverse().join(' · ')}`, R.ended === 'caught' ? 'bad' : 'info');
+  g.raidClose();
 }

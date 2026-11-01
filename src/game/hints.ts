@@ -37,7 +37,12 @@ export function nextHint(g: Game): string {
     if (missing) { const have = g.board.has(missing.a) ? missing.a : missing.b; return `Zu „${g.cards[have].title}“ fehlt noch ein passendes Gegenstück. Suchen Sie weiter, fragen Sie nach oder warten Sie auf Unterlagen.`; }
     return 'Prüfen Sie die Dossiers: Welche Verdächtigen passen nicht zu Ihren Erkenntnissen? Streichen Sie sie mit ✗.';
   }
-  // 6) Verfolgung
+  // 6) Verschanzt?
+  const quiet = g.round - Math.max(0, ...g.traces.filter((t) => t.kind !== 'start' && !t.fake).map((t) => t.round));
+  const bt = [...g.traces].reverse().find((t) => t.kind === 'building');
+  if (bt && bt.round >= g.round - 3) return `Ein Zeuge hat jemanden in ein Gebäude gehen sehen (Runde ${bt.round}). Fahren Sie mit einer Einheit hin und durchsuchen Sie es (🏢 neben der Einheit).`;
+  if (quiet >= 2) return 'Seit zwei Runden gibt es keine Spuren. Vielleicht hat sich die Zielperson in einem Gebäude verschanzt. Durchsuchen Sie Gebäude am letzten bekannten Ort; das Personal verrät, ob dort jemand Fremdes ist.';
+  // 7) Verfolgung
   const last = [...g.traces].filter((t) => !t.r && t.kind !== 'start').sort((a, b) => b.round - a.round)[0];
   const ex = g.chapter.escape;
   if (ex && g.round >= ex.fromRound - 2) return `Die Fluchtpunkte öffnen bald. Stellen Sie Einheiten auf ${ex.places.map(P).join(', ')}.`;

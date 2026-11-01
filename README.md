@@ -60,6 +60,15 @@ In manchen Akten öffnen ab einer bestimmten Runde **Fluchtpunkte** wie Heliport
 - **Tipps (💡)** gegen Punktabzug und eine **Wertung mit Rang** und lokalem Bestwert am Ende
 - **Tutorial „Erster Arbeitstag“** mit Coach, der Schritt für Schritt durch alle Ansichten führt
 
+### Gebäude: Verschanzen & Durchsuchen
+
+- Flüchtige können sich in einem Gebäude am aktuellen Knoten verschanzen. Dort sind sie für Kameras, Funkzelle und Hubschrauber unsichtbar, sitzen aber fest. Manchmal sieht ein Zeuge, wie sie hineingehen.
+- Mit Haftbefehl durchsucht eine Einheit vor Ort das Gebäude. Es öffnet sich ein Querschnitt mit Etagen und Räumen (Hotel, Bürohaus, Parkhaus, Kaufhaus, Wohnhaus, Lagerhaus).
+- Pro Durchgang gibt es 3 Aktionen: einen Raum durchsuchen, eine Etage abriegeln, einen Ausgang sichern oder Personal befragen.
+- Raumbilder als Wimmelbild: Die Person steht halb hinter Möbeln, dazwischen Schaufensterpuppen, Mäntel und Lampen als Täuschung, dazu Spuren früherer Verstecke. Für jeden Raum gibt es 25 Sekunden.
+- Die Zielperson wechselt zwischen den Durchgängen den Raum und entkommt über ungesicherte Ausgänge (Dach, Tiefgarage, Lieferanteneingang).
+- Storyfälle haben feste Gebäude, zum Beispiel das Hotel The Plaza.
+
 ### Für Flüchtige
 
 - 🚲 Leihrad (zwei Schritte, Ausleih-Spur), 🎭 Verkleidung (zwei Runden unsichtbar für Kameras und Hubschrauber) und 🧭 falsche Fährte (gefälschte U-Bahn-Spur)

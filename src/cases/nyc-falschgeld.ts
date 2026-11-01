@@ -304,6 +304,12 @@ export const falschgeldCase: CaseDef = {
       outro: ['Marcus Harrow wird festgenommen. In seiner Aktentasche: drei Pässe und die Zugangsdaten zu 14 Konten auf den Kaimaninseln.'],
     },
   ],
+  buildings: {
+    druckerei: { type: 'Lagerhaus', name: 'Druckerei Lazarus', floors: 3 },
+    bank: { type: 'Bürohaus', name: 'Harrow & Finch Tower', floors: 5 },
+    lager: { type: 'Lagerhaus', name: 'Hudson Freight Lager', floors: 3 },
+    markt: { type: 'Kaufhaus', name: 'Chelsea Market', floors: 3 },
+  },
   epilogue: [
     'Der Falschgeldring ist zerschlagen. 4,3 Millionen Dollar in Blüten werden sichergestellt.',
     'Helen Voss stellt im Gefängnis Radierungen her. Ein Museum hat bereits angefragt.',

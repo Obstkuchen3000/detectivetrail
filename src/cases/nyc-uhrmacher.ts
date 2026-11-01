@@ -246,6 +246,12 @@ export const uhrmacherCase: CaseDef = {
       outro: ['Felix Brandauer wird in der St. Paul’s Chapel festgenommen, die Breguet in der Hand. In seinem Gepäck: die beiden Uhren aus den früheren Einbrüchen.'],
     },
   ],
+  buildings: {
+    plaza: { type: 'Hotel', name: 'Hotel The Plaza', floors: 5 },
+    hemmings: { type: 'Wohnhaus', name: 'Antiquariat Hemmings & Wohnungen', floors: 4 },
+    lark: { type: 'Lagerhaus', name: 'Werkstatt Lark', floors: 3 },
+    gct_uhr: { type: 'Kaufhaus', name: 'Grand Central Terminal', floors: 3 },
+  },
   epilogue: [
     'Die Opaluhr in der Grand Central tickt weiter. Die Pendler bemerken nicht, wie knapp es war.',
     'Theo Lark hilft der Polizei, die gestohlenen Uhren zurückzuverfolgen. Hemmings schreibt im Gefängnis Briefe, diesmal an seinen Anwalt.',

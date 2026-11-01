@@ -380,6 +380,12 @@ export const saphirCase: CaseDef = {
       outro: ['Celeste Moreau wird festgenommen. In ihrer Handtasche liegen ein Pass auf einen anderen Namen und ein Ticket nach Antwerpen.'],
     },
   ],
+  buildings: {
+    penthouse: { type: 'Wohnhaus', name: 'Moreau Tower (Penthouse)', floors: 5 },
+    werkstatt: { type: 'Wohnhaus', name: 'Orchard Street 112', floors: 4 },
+    versicherung: { type: 'Bürohaus', name: 'Wynn Insurance Building', floors: 5 },
+    swift: { type: 'Lagerhaus', name: 'Swift Couriers Depot', floors: 3 },
+  },
   epilogue: [
     'Der „Blaue Reiher“ liegt wieder in Halvorsens Tresor. Halvorsen hat den Code geändert.',
     'Ray Booker bekommt wegen seines Geständnisses eine milde Strafe. Jonah Pike verliert seinen Job bei Swift, sagt aber gegen Moreau aus.',

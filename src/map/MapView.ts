@@ -424,7 +424,7 @@ export class MapView {
         ctx.globalAlpha = alpha;
         label(ctx, `R${tr.round} ${tr.kind === 'ping' ? 'FUNKZELLE' : tr.kind === 'clear' ? 'HUBSCHRAUBER: NEGATIV' : 'TAXI'}`, p.x, p.y - R - 9, col);
       } else {
-        const icon = { start: '✕', cctv: '◉', metrocard: 'M', sighting: '!', item: '◆', ping: '', taxi: '', bike: 'B', heli: 'H', clear: '' }[tr.kind];
+        const icon = { start: '✕', cctv: '◉', metrocard: 'M', sighting: '!', item: '◆', ping: '', taxi: '', bike: 'B', heli: 'H', clear: '', building: 'G' }[tr.kind];
         if (tr.kind === 'sighting') { const k = (t % 1.5) / 1.5; ctx.globalAlpha = alpha * (1 - k); ctx.beginPath(); ctx.arc(p.x, p.y, 10 + k * 22, 0, Math.PI * 2); ctx.stroke(); ctx.globalAlpha = alpha; }
         ctx.fillStyle = '#05101c'; ctx.beginPath(); ctx.arc(p.x, p.y, 10, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
         ctx.fillStyle = col; ctx.font = 'bold 11px "JetBrains Mono", monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(icon, p.x, p.y + 0.5);
@@ -515,10 +515,11 @@ export class MapView {
     ctx.strokeStyle = '#fb923c'; ctx.lineWidth = 2.5; ctx.setLineDash([2, 4]); ctx.beginPath();
     path.forEach((st, i) => { const n = g.graph.nodes[st.node]; const p = this.toScreen(n.x, n.y); i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y); });
     ctx.stroke(); ctx.setLineDash([]);
-    path.forEach((st) => { if (!st.round) return; const n = g.graph.nodes[st.node]; const p = this.toScreen(n.x, n.y); label(ctx, `R${st.round}${st.mode === 'subway' ? ' 🚇' : st.mode === 'taxi' ? ' 🚕' : st.mode === 'stay' ? ' ⏸' : ''}`, p.x - 18, p.y + 16, '#fb923c'); });
+    path.forEach((st) => { if (!st.round) return; const n = g.graph.nodes[st.node]; const p = this.toScreen(n.x, n.y); label(ctx, `R${st.round}${st.mode === 'subway' ? ' 🚇' : st.mode === 'taxi' ? ' 🚕' : st.mode === 'stay' ? ' ⏸' : st.mode === 'hide' ? ' 🏢' : ''}`, p.x - 18, p.y + 16, '#fb923c'); });
     const cur = g.graph.nodes[g.fugitive.node]; const p = this.toScreen(cur.x, cur.y);
     ctx.fillStyle = '#fb923c'; ctx.beginPath(); ctx.arc(p.x, p.y, 8 + Math.sin(t * 4) * 1.5, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = '#05101c'; ctx.font = 'bold 10px monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('X', p.x, p.y + 0.5);
+    ctx.fillStyle = '#05101c'; ctx.font = 'bold 10px monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(g.fugitive.hidden ? '⌂' : 'X', p.x, p.y + 0.5);
+    if (g.fugitive.hidden) label(ctx, 'VERSCHANZT', p.x, p.y - 18, '#fb923c');
     if (viewer !== 'fugitive' || g.phase !== 'fugitive') return;
     const opts = this.cb.fugitiveOptions();
     const byNode = new Map<number, MoveOption[]>();
@@ -579,7 +580,7 @@ export class MapView {
 }
 
 function traceColor(t: Trace) {
-  return { start: '#ef4444', cctv: '#f87171', metrocard: '#facc15', taxi: '#f59e0b', ping: '#22d3ee', sighting: '#ef4444', item: '#e879f9', bike: '#34d399', heli: '#4ade80', clear: '#4ade80' }[t.kind];
+  return { start: '#ef4444', cctv: '#f87171', metrocard: '#facc15', taxi: '#f59e0b', ping: '#22d3ee', sighting: '#ef4444', item: '#e879f9', bike: '#34d399', heli: '#4ade80', clear: '#4ade80', building: '#c084fc' }[t.kind];
 }
 function label(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, color: string) {
   ctx.font = '600 10px "JetBrains Mono", ui-monospace, monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
