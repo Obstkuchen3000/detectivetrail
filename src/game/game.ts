@@ -12,6 +12,10 @@ export type Phase = 'chapter-intro' | 'handover-fugitive' | 'fugitive' | 'handov
 export type Sfx = 'click' | 'pin' | 'thread' | 'snap' | 'found' | 'phone' | 'answer' | 'radio' | 'trace' | 'siren' | 'fail' | 'warrant' | 'move' | 'chapter';
 
 export const AP_PER_ROUND = 2;
+export type AiLevel = 'leicht' | 'normal' | 'schwer';
+export interface GameOptions { police: AiLevel; fugitive: AiLevel }
+export const HELI_RADIUS = 500;
+export const ACTION_COST = { search: 1, roadblock: 1, observe: 1, heli: 2 } as const;
 export const SEARCH_RADIUS = 220;
 const UNIT_COLORS = ['#38bdf8', '#a3e635', '#f472b6', '#fbbf24'];
 
@@ -25,7 +29,11 @@ export class Game {
   round = 1;
   phase: Phase = 'chapter-intro';
   ap = AP_PER_ROUND;
-  fugitive = { node: 0, taxis: 3, path: [] as FugitiveStep[], movesLeft: 1 };
+  fugitive = { node: 0, taxis: 3, path: [] as FugitiveStep[], movesLeft: 1, disguise: 0, gadgets: { disguise: 1, decoy: 1 }, decoyArmed: false };
+  roadblocks: { node: number; round: number }[] = [];
+  observed: number[] = [];
+  resolved: string[] = [];
+  opts: GameOptions = { police: 'normal', fugitive: 'normal' };
   units: Unit[];
   traces: Trace[] = [];
   annotations: Annotation[] = [];
@@ -44,15 +52,16 @@ export class Game {
   belief: number[] = [];
   aiWarrantRound = 99;
   chapterSnapshot: string | null = null;
-  stats = { arrests: 0, wrongWarrants: 0, threads: 0, wrongThreads: 0, startedAt: Date.now() };
+  stats = { arrests: 0, wrongWarrants: 0, threads: 0, wrongThreads: 0, hints: 0, wrongPresent: 0, roundsUsed: 0, tracesLeft: 0, startedAt: Date.now() };
   cards: Record<string, CardDef>;
   lastEvent: { text: string; kind: 'good' | 'bad' | 'info' } | null = null;
   sfx: (s: Sfx) => void = () => {};
   private listeners = new Set<() => void>();
   private nextId = 1;
 
-  constructor(public map: CityMap, public def: CaseDef, public mode: GameMode, public seed = (Date.now() & 0xffffff) + 1) {
+  constructor(public map: CityMap, public def: CaseDef, public mode: GameMode, public seed = (Date.now() & 0xffffff) + 1, opts?: Partial<GameOptions>) {
     this.rng = new Rng(seed);
+    this.opts = { ...this.opts, ...opts };
     const places = Object.entries(def.places).map(([key, p]) => { const [x, y] = project(map, p.lon, p.lat); return { key, name: p.name, x, y }; });
     this.graph = new CityGraph(map, places, seed);
     this.cards = { ...def.cards };
@@ -76,6 +85,8 @@ export class Game {
   rnd = () => this.rng.next();
   placeNode(key: string) { return this.graph.placeIndex.get(key)!; }
   escapeNodes(): number[] { return this.chapter.escape ? this.chapter.escape.places.map((p) => this.placeNode(p)) : []; }
+  ambushTarget(): number | null { return this.chapter.ambush ? this.placeNode(this.chapter.ambush.target) : null; }
+  ambushCandidates(): number[] { return this.chapter.ambush ? this.chapter.ambush.candidates.map((p) => this.placeNode(p)) : []; }
 
   subscribe(f: () => void) { this.listeners.add(f); return () => this.listeners.delete(f); }
   emit() { this.listeners.forEach((f) => f()); }
@@ -97,7 +108,8 @@ export class Game {
       const sn = this.graph.nodes[start];
       u.node = this.graph.nearest(sn.x + 1400, sn.y + 900, (k) => !occ.has(k) && this.graph.nodes[k].kind === 'station');
     }
-    this.fugitive = { node: start, taxis: ch.taxis, path: [{ round: 0, node: start, mode: 'stay' }], movesLeft: 1 + (ch.headStart ?? 0) };
+    this.fugitive = { node: start, taxis: ch.taxis, path: [{ round: 0, node: start, mode: 'stay' }], movesLeft: 1 + (ch.headStart ?? 0), disguise: 0, gadgets: { disguise: ch.tutorial ? 0 : 1, decoy: ch.tutorial ? 0 : 1 }, decoyArmed: false };
+    this.roadblocks = []; this.observed = [];
     const sn = this.graph.nodes[start];
     this.addTrace({ round: 0, kind: 'start', x: sn.x, y: sn.y, text: (i === 0 ? 'Tatort: ' : 'Ausgangspunkt: ') + sn.name, tag: i === 0 ? 'TATORT' : 'START' });
     for (const p of ch.searchAt ?? [ch.start]) { const n = this.graph.nodes[this.placeNode(p)]; this.searchAreas.push({ x: n.x, y: n.y, r: 160, round: 0 }); }
@@ -108,7 +120,7 @@ export class Game {
     for (const id of ch.startCards) this.placeCard(id);
     for (const s of this.def.suspects) if ((s.chapter ?? 0) === i) this.placeCard('dossier_' + s.id);
     this.belief = [start];
-    this.aiWarrantRound = 3 + this.rng.int(3);
+    this.aiWarrantRound = (this.opts.police === 'leicht' ? 6 : this.opts.police === 'schwer' ? 2 : 3) + this.rng.int(3);
     this.phase = 'chapter-intro';
     this.chapterSnapshot = null;
     this.chapterSnapshot = this.serialize();
@@ -135,8 +147,21 @@ export class Game {
   }
 
   // ---------------- Flüchtiger ----------------
-  blockedForFugitive() { return new Set(this.units.map((u) => u.node)); }
-  fugitiveOptions() { return this.graph.fugitiveOptions(this.fugitive.node, this.fugitive.taxis, this.blockedForFugitive()); }
+  blockedForFugitive() {
+    const b = new Set(this.units.map((u) => u.node));
+    for (const r of this.roadblocks) if (r.round === this.round - 1) b.add(r.node);
+    const t = this.ambushTarget(); if (t !== null) b.delete(t); // getarnte Observation am Ziel
+    return b;
+  }
+  fugitiveOptions() {
+    const o = this.graph.fugitiveOptions(this.fugitive.node, this.fugitive.taxis, this.blockedForFugitive());
+    return this.chapter.tutorial ? o.filter((x) => x.mode === 'foot' || x.mode === 'stay') : o;
+  }
+  activeRoadblocks() { return this.roadblocks.filter((r) => r.round >= this.round - (this.phase === 'detective' ? 0 : 1)); }
+
+  // Hilfsmittel des Flüchtigen
+  useDisguise() { if (this.phase !== 'fugitive' || this.fugitive.gadgets.disguise <= 0) return; this.fugitive.gadgets.disguise--; this.fugitive.disguise = 2; this.sfx('click'); this.emit(); }
+  armDecoy() { if (this.phase !== 'fugitive' || this.fugitive.gadgets.decoy <= 0) return; this.fugitive.gadgets.decoy--; this.fugitive.decoyArmed = true; this.sfx('click'); this.emit(); }
 
   private runAi() {
     while (this.phase === 'fugitive') this.applyFugitiveMove(aiChooseMove(this));
@@ -153,7 +178,7 @@ export class Game {
     this.fugitive.node = to;
     this.fugitive.path.push({ round: this.round, node: to, mode: opt.mode, route: opt.route });
     const r = this.round;
-    const camChance = this.warrant ? 0.85 : 0.5;
+    const camChance = this.fugitive.disguise > 0 ? 0 : this.chapter.tutorial ? 1 : this.warrant ? 0.85 : 0.5;
     const fresh: Trace[] = [];
     const tr = (t: Omit<Trace, 'id'>) => { this.addTrace(t); fresh.push(this.traces[this.traces.length - 1]); };
     if (opt.mode === 'subway') tr({ round: r, kind: 'metrocard', x: A.x, y: A.y, node: from, route: opt.route, text: `Fahrkarte entwertet: ${A.name}, Linie ${opt.route}` });
@@ -162,7 +187,19 @@ export class Game {
       const ang = this.rnd() * Math.PI * 2, off = this.rnd() * 380;
       tr({ round: r, kind: 'taxi', x: B.x + Math.cos(ang) * off, y: B.y + Math.sin(ang) * off, r: 520, text: 'Taxifahrt, bar bezahlt: Das Ziel ist ungefähr bekannt' });
     }
-    if (opt.mode !== 'stay' && B.camera && this.rnd() < camChance) tr({ round: r, kind: 'cctv', x: B.x, y: B.y, node: to, text: `Kamera-Treffer: ${B.name}` });
+    else if (opt.mode === 'bike') tr({ round: r, kind: 'bike', x: A.x, y: A.y, node: from, text: `Leihrad ausgeliehen: ${A.name}` });
+    if (this.fugitive.decoyArmed) {
+      this.fugitive.decoyArmed = false;
+      const cands = G.nodes.map((n, i) => i).filter((i) => G.nodes[i].kind === 'station' && G.sub[i].length && Math.hypot(G.nodes[i].x - B.x, G.nodes[i].y - B.y) > 900 && Math.hypot(G.nodes[i].x - B.x, G.nodes[i].y - B.y) < 2800);
+      if (cands.length) {
+        const fn = cands[Math.floor(this.rnd() * cands.length)]; const F = G.nodes[fn];
+        const route = G.sub[fn][0].routes[0];
+        this.addTrace({ round: r, kind: 'metrocard', x: F.x, y: F.y, node: fn, route, fake: true, text: `Fahrkarte entwertet: ${F.name}, Linie ${route}` });
+        fresh.push(this.traces[this.traces.length - 1]);
+      }
+    }
+    if (this.observed.includes(to) && this.fugitive.disguise <= 0) tr({ round: r, kind: 'cctv', x: B.x, y: B.y, node: to, text: `Observation meldet Zielperson: ${B.name}` });
+    else if (opt.mode !== 'stay' && B.camera && this.rnd() < camChance) tr({ round: r, kind: 'cctv', x: B.x, y: B.y, node: to, text: `Kamera-Treffer: ${B.name}` });
     if (opt.mode !== 'stay' && this.rnd() < 0.4) {
       const d = this.def.dropItems[Math.floor(this.rnd() * this.def.dropItems.length)];
       const ang = this.rnd() * Math.PI * 2, off = 25 + this.rnd() * 70;
@@ -170,20 +207,38 @@ export class Game {
     }
     this.fugitive.movesLeft--;
     const done = this.fugitive.movesLeft <= 0;
+    if (done && this.fugitive.disguise > 0) this.fugitive.disguise--;
     if (done && this.chapter.pingRounds.includes(r)) {
       const ang = this.rnd() * Math.PI * 2, off = this.rnd() * 520;
       tr({ round: r, kind: 'ping', x: B.x + Math.cos(ang) * off, y: B.y + Math.sin(ang) * off, r: 700, text: 'Funkzelle: Ein Prepaid-Handy hat sich eingewählt' });
     }
+    this.stats.tracesLeft += fresh.length;
     updateBeliefAfterMove(this, fresh);
     this.sfx('move');
+    // Hinterhalt: Der Täter erreicht sein Ziel
+    const amb = this.chapter.ambush;
+    if (amb && to === this.placeNode(amb.target)) {
+      const guard = this.units.find((u) => u.node === to);
+      if (guard) {
+        this.stats.arrests++; this.stats.roundsUsed += r;
+        this.result = { winner: 'detectives', reason: `${guard.name} hat ${this.culprit.name} bei ${B.name} auf frischer Tat ertappt.`, final: this.isLastChapter };
+        this.phase = 'over'; this.sfx('siren'); this.emit(); return;
+      }
+      if (r >= amb.fromRound) {
+        this.stats.roundsUsed += r;
+        this.result = { winner: 'fugitive', reason: `${this.culprit.name} hat bei ${B.name} zugeschlagen und ist mit der Beute verschwunden. Niemand hat dort gewartet.`, final: true };
+        this.phase = 'over'; this.sfx('fail'); this.emit(); return;
+      }
+    }
     // Flucht über einen Ausgang?
     const ex = this.chapter.escape;
     if (ex && r >= ex.fromRound && this.escapeNodes().includes(to)) {
+      this.stats.roundsUsed += r;
       this.result = { winner: 'fugitive', reason: `${this.culprit.name} hat sich über ${B.name} abgesetzt. Die Spur verliert sich.`, final: true };
       this.phase = 'over'; this.sfx('fail'); this.emit(); return;
     }
     if (!done) { this.emit(); return; }
-    for (const t of this.chapter.timed) if (t.round === r && (!t.needs || this.board.has(t.needs)) && !this.board.has(t.card)) { this.placeCard(t.card); this.notify('Neue Unterlagen: ' + this.cards[t.card].title, 'info'); }
+    for (const t of this.chapter.timed) if (t.round <= r && (!t.needs || this.board.has(t.needs)) && !this.board.has(t.card)) { this.placeCard(t.card); this.notify('Neue Unterlagen: ' + this.cards[t.card].title, 'info'); }
     if (this.mode === 'fugitive') {
       this.phase = 'detective';
       detectiveAiTurn(this);
@@ -192,7 +247,6 @@ export class Game {
       return;
     }
     this.phase = this.mode === 'hotseat' ? 'handover-detective' : 'detective';
-    this.lastEvent = null;
     if (fresh.length) this.sfx('trace');
     this.emit();
   }
@@ -221,6 +275,7 @@ export class Game {
     const nd = this.graph.nodes[u.node];
     if (this.warrant === this.chapter.culprit) {
       this.stats.arrests++;
+      this.stats.roundsUsed += this.round;
       const final = this.isLastChapter;
       this.result = { winner: 'detectives', reason: `${u.name} hat ${this.culprit.name} bei ${nd.name} festgenommen.`, final };
       this.phase = 'over';
@@ -243,6 +298,38 @@ export class Game {
     this.sfx('radio');
     this.emit();
     return true;
+  }
+
+  placeRoadblock(node: number) {
+    if (!this.canSpend(ACTION_COST.roadblock) || this.roadblocks.some((r) => r.node === node && r.round === this.round)) return false;
+    this.ap -= ACTION_COST.roadblock;
+    this.roadblocks.push({ node, round: this.round });
+    if (this.mode !== 'fugitive') this.notify(`Straßensperre bei ${this.graph.nodes[node].name}: Der Flüchtige kommt in der nächsten Runde dort nicht durch.`, 'info');
+    this.sfx('radio'); this.emit(); return true;
+  }
+
+  placeObservation(node: number) {
+    if (!this.canSpend(ACTION_COST.observe) || this.observed.includes(node)) return false;
+    this.ap -= ACTION_COST.observe;
+    this.observed.push(node);
+    if (this.mode !== 'fugitive') this.notify(`Observation eingerichtet: ${this.graph.nodes[node].name} wird ab jetzt dauerhaft überwacht.`, 'info');
+    this.sfx('radio'); this.emit(); return true;
+  }
+
+  heliScan(x: number, y: number) {
+    if (!this.canSpend(ACTION_COST.heli)) return false;
+    this.ap -= ACTION_COST.heli;
+    const F = this.graph.nodes[this.fugitive.node];
+    if (dist(F.x, F.y, x, y) <= HELI_RADIUS && this.fugitive.disguise <= 0) {
+      this.addTrace({ round: this.round, kind: 'heli', x: F.x, y: F.y, node: this.fugitive.node, text: `Hubschrauber: Wärmebild erfasst Zielperson bei ${F.name}` });
+      this.belief = [this.fugitive.node];
+      this.notify(`Treffer! Der Hubschrauber hat die Zielperson bei ${F.name} erfasst.`, 'good');
+    } else {
+      this.addTrace({ round: this.round, kind: 'clear', x, y, r: HELI_RADIUS, text: 'Hubschrauber: In diesem Gebiet kein Treffer' });
+      this.belief = this.belief.filter((i) => dist(this.graph.nodes[i].x, this.graph.nodes[i].y, x, y) > HELI_RADIUS);
+      if (this.mode !== 'fugitive') this.notify('Der Hubschrauber findet in diesem Gebiet niemanden.', 'info');
+    }
+    this.sfx('radio'); this.emit(); return true;
   }
 
   isSearched(x: number, y: number) { return this.searchAreas.some((s) => dist(s.x, s.y, x, y) <= s.r); }
@@ -356,6 +443,26 @@ export class Game {
     this.emit();
   }
 
+  /** Beweisstück vorlegen, um eine Lüge zu entlarven. Liefert die neue Antwort oder null. */
+  present(c: Contact, cardId: string): string | null {
+    if (this.phase !== 'detective' || !this.unitAtPlace(c)) return null;
+    for (const q of this.visibleQuestions(c)) {
+      const key = c.id + '.' + q.id;
+      if (!q.contradiction || !this.asked.includes(key) || this.resolved.includes(key)) continue;
+      if (q.contradiction.card !== cardId) continue;
+      this.resolved.push(key);
+      this.sfx('thread');
+      for (const g of q.contradiction.gives ?? []) if (!this.board.has(g)) { this.placeCard(g); this.notify(`Widerspruch aufgedeckt! Neu an der Pinnwand: ${this.cards[g].title}`, 'good'); }
+      this.emit();
+      return q.contradiction.answer;
+    }
+    this.stats.wrongPresent++;
+    this.sfx('snap');
+    this.emit();
+    return null;
+  }
+  openLies(c: Contact) { return this.visibleQuestions(c).filter((q) => q.contradiction && this.asked.includes(c.id + '.' + q.id) && !this.resolved.includes(c.id + '.' + q.id)); }
+
   // ---------------- Annotationen ----------------
   addAnnotation(a: Omit<Annotation, 'id'>) { this.annotations.push({ ...a, id: this.nextId++ }); this.sfx('pin'); this.emit(); }
   removeAnnotation(id: number) { this.annotations = this.annotations.filter((a) => a.id !== id); this.emit(); }
@@ -373,6 +480,7 @@ export class Game {
   }
 
   private finishFugitiveWin() {
+    this.stats.roundsUsed += Math.min(this.round, this.chapter.maxRounds);
     this.result = { winner: 'fugitive', reason: `${this.culprit.name} ist entkommen. Die Zeit ist abgelaufen, und die Spur ist kalt.`, final: true };
     this.phase = 'over';
     this.sfx('fail');
@@ -388,18 +496,22 @@ export class Game {
       fugitive: this.fugitive, units: this.units, traces: this.traces, annotations: this.annotations, searchAreas: this.searchAreas, items: this.items,
       board: [...this.board.values()], threads: this.threads, cleared: [...this.cleared], marked: [...this.marked], warrant: this.warrant,
       asked: this.asked, callActive: [...this.callActive], log: this.log, result: this.result, belief: this.belief, aiWarrantRound: this.aiWarrantRound,
-      chapterSnapshot: this.chapterSnapshot, stats: this.stats, nextId: this.nextId,
+      chapterSnapshot: this.chapterSnapshot, stats: this.stats, nextId: this.nextId, roadblocks: this.roadblocks, observed: this.observed, resolved: this.resolved, opts: this.opts,
     });
   }
 
   static restore(map: CityMap, def: CaseDef, json: string): Game {
     const d = JSON.parse(json);
-    const g = new Game(map, def, d.mode, d.seed);
+    const g = new Game(map, def, d.mode, d.seed, d.opts);
     g.rng.s = d.rng; g.chapterIdx = d.chapterIdx; g.round = d.round; g.phase = d.phase; g.ap = d.ap;
     g.fugitive = d.fugitive; g.units = d.units; g.traces = d.traces; g.annotations = d.annotations; g.searchAreas = d.searchAreas; g.items = d.items;
     g.board = new Map((d.board as BoardCard[]).map((c) => [c.id, c])); g.threads = d.threads; g.cleared = new Set(d.cleared); g.marked = new Set(d.marked);
     g.warrant = d.warrant; g.asked = d.asked; g.callActive = new Map(d.callActive); g.log = d.log; g.result = d.result; g.belief = d.belief;
-    g.aiWarrantRound = d.aiWarrantRound; g.chapterSnapshot = d.chapterSnapshot ?? (d.phase === 'chapter-intro' ? json : null); g.stats = d.stats; g.nextId = d.nextId;
+    // Hotseat: nach dem Laden nicht direkt die Sicht des Flüchtigen zeigen
+    if (g.mode === 'hotseat' && g.phase === 'fugitive') g.phase = 'handover-fugitive';
+    g.aiWarrantRound = d.aiWarrantRound; g.chapterSnapshot = d.chapterSnapshot ?? (d.phase === 'chapter-intro' ? json : null); g.stats = { ...g.stats, ...d.stats }; g.nextId = d.nextId;
+    g.roadblocks = d.roadblocks ?? []; g.observed = d.observed ?? []; g.resolved = d.resolved ?? [];
+    g.fugitive = { disguise: 0, gadgets: { disguise: 0, decoy: 0 }, decoyArmed: false, ...d.fugitive };
     return g;
   }
 }

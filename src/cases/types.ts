@@ -28,6 +28,8 @@ export interface Question {
   answer: string;
   gives?: string[];
   fromChapter?: number;
+  /** Die Antwort ist gelogen: mit dem passenden Beweisstück (vor Ort) kippt sie */
+  contradiction?: { card: string; answer: string; gives?: string[] };
 }
 export interface Contact {
   id: string;
@@ -60,6 +62,10 @@ export interface Chapter {
   /** Zusätzliche Züge des Flüchtigen vor der ersten Runde */
   headStart?: number;
   escape?: { places: string[]; fromRound: number };
+  /** Hinterhalt: Der Täter will ab fromRound an einem von mehreren möglichen Orten zuschlagen */
+  ambush?: { target: string; candidates: string[]; fromRound: number };
+  /** Lernmodus: Flüchtiger geht nur zu Fuß, Kameras erfassen ihn immer */
+  tutorial?: boolean;
   startCards: string[];
   sceneItems: SceneItem[];
   searchAt?: string[];

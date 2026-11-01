@@ -23,10 +23,10 @@ export interface GNode {
   camera: boolean;
 }
 
-export type MoveMode = 'foot' | 'subway' | 'taxi' | 'stay';
+export type MoveMode = 'foot' | 'bike' | 'subway' | 'taxi' | 'stay';
 export interface MoveOption { to: number; mode: MoveMode; route?: string }
 
-export type TraceKind = 'start' | 'cctv' | 'metrocard' | 'taxi' | 'ping' | 'sighting' | 'item';
+export type TraceKind = 'start' | 'cctv' | 'metrocard' | 'taxi' | 'ping' | 'sighting' | 'item' | 'bike' | 'heli' | 'clear';
 export interface Trace {
   id: number;
   round: number;
@@ -38,6 +38,8 @@ export interface Trace {
   tag?: string;
   node?: number;
   route?: string;
+  /** falsche Fährte des Flüchtigen (für Ermittler nicht erkennbar) */
+  fake?: boolean;
 }
 
 export type AnnoType = 'pin' | 'person' | 'circle' | 'line' | 'note';
