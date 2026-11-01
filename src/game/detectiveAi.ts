@@ -12,8 +12,11 @@ export function updateBeliefAfterMove(g: Game, fresh: Trace[]) {
   let next = new Set<number>();
   const metro = fresh.find((t) => t.kind === 'metrocard');
   const taxi = fresh.find((t) => t.kind === 'taxi');
+  const bike = fresh.find((t) => t.kind === 'bike');
   if (metro && metro.node !== undefined && metro.route) {
     for (const w of G.subwayTargets(metro.node, metro.route)) next.add(w);
+  } else if (bike && bike.node !== undefined) {
+    for (const w of G.bikeTargets(bike.node)) next.add(w);
   } else if (taxi) {
     G.nodes.forEach((n, i) => { if (dist(n.x, n.y, taxi.x, taxi.y) <= (taxi.r ?? 520) + 40) next.add(i); });
   } else {
@@ -46,8 +49,11 @@ export function detectiveAiTurn(g: Game) {
   const belief = new Set(g.belief);
   const cx = g.belief.reduce((s, i) => s + G.nodes[i].x, 0) / Math.max(1, g.belief.length);
   const cy = g.belief.reduce((s, i) => s + G.nodes[i].y, 0) / Math.max(1, g.belief.length);
+  const lvl = g.opts.police;
+  // Hubschrauber bei großer Unsicherheit (nur „schwer“)
+  if (lvl === 'schwer' && g.belief.length > 6 && g.ap >= 2) g.heliScan(cx, cy);
   // Suchgebiet, wenn die Lage unklar ist
-  if (g.belief.length > 4 && g.ap > 0) {
+  if (lvl !== 'leicht' && g.belief.length > 4 && g.ap > 0) {
     g.placeSearch(cx, cy);
     for (const it of g.items) if (!it.found && !it.cardId && g.isSearched(it.x, it.y) && g.rnd() < 0.7) g.collectItem(it.id, true);
   }
@@ -74,6 +80,13 @@ export function detectiveAiTurn(g: Game) {
     if (exitGuard && exits.includes(best)) exitGuard = 0;
     for (const b of g.belief) if (G.unitDist[best][b] <= 1) covered.add(b);
     if (best !== u.node) g.moveUnit(i, best);
+  }
+  // Straßensperre auf den wahrscheinlichsten Fluchtweg
+  if (lvl !== 'leicht' && g.ap > 0 && g.phase === 'detective' && g.belief.length > 1) {
+    const cnt = new Map<number, number>();
+    for (const b of g.belief) for (const w of G.walk[b]) cnt.set(w, (cnt.get(w) ?? 0) + 1);
+    const best = [...cnt].filter(([n]) => !g.units.some((u) => u.node === n)).sort((a, b) => b[1] - a[1])[0];
+    if (best) g.placeRoadblock(best[0]);
   }
   g.checkAllContacts();
 }

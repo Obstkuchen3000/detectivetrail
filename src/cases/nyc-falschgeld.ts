@@ -63,6 +63,7 @@ export const falschgeldCase: CaseDef = {
     ana_aussage: { kind: 'aussage', icon: '🐟', title: 'Aussage Ana Costa', text: 'Der Mann kauft jeden Tag Eis für „sein Lager“. Er hat rote Haare unter einer grünen Mütze.' },
     ana_hf: { kind: 'aussage', icon: '🏭', title: 'Lager am Wasser', text: 'Ana: „Die Mütze gehört ihm! Er arbeitet bei Hudson Freight, die holen bei mir immer Eis für die Kühlcontainer.“' },
     kessler_links: { kind: 'aussage', icon: '✍️', title: 'Linke Hand', text: 'Schichtleiter Delgado: „Die Schrift auf dem Frachtbrief ist von Kessler. Er schreibt mit links und verschmiert immer alles.“' },
+    kessler_mittag: { kind: 'aussage', icon: '🕛', title: 'Kessler war mittags weg', text: 'Delgado gibt zu: Kessler war zur Übergabezeit nicht im Lager, sondern „Eis holen“ im Chelsea Market.' },
     hollis_fahrtenbuch: { kind: 'dokument', icon: '🚚', title: 'Fahrtenbuch Hollis', text: 'Tariq Hollis war von 10:30 bis 14:00 auf Tour in Newark, New Jersey. Die Mautdaten bestätigen das.' },
     marsh_alibi: { kind: 'aussage', icon: '🍸', title: 'Dee am Tresen', text: 'Dee Marsh stand von 11 bis 15 Uhr hinter dem Tresen des Rusty Anchor. Stammgäste bestätigen das.' },
     brady_schicht: { kind: 'dokument', icon: '⚓', title: 'Schichtplan Pier 57', text: 'Owen Brady war bis 13 Uhr beim Entladen auf Pier 57 eingeteilt. Er hat sich nicht abgemeldet.' },
@@ -110,6 +111,7 @@ export const falschgeldCase: CaseDef = {
     { a: 'einsatzbericht', b: 'muetze', result: 'profil_bote' },
     { a: 'ana_hf', b: 'eisquittung', result: 'spur_hf' },
     { a: 'kessler_links', b: 'profil_bote', result: 'kessler_passt' },
+    { a: 'kessler_mittag', b: 'profil_bote', result: 'kessler_passt' },
     { a: 'hollis_fahrtenbuch', b: 'dossier_hollis', result: 'hollis_entlastet' },
     { a: 'marsh_alibi', b: 'dossier_marsh', result: 'marsh_entlastet' },
     { a: 'brady_schicht', b: 'profil_bote', result: 'brady_rechts' },
@@ -137,7 +139,7 @@ export const falschgeldCase: CaseDef = {
     {
       id: 'delgado', name: 'Frank Delgado', role: 'Schichtleiter, Hudson Freight', place: 'lager', hue: 30, untilChapter: 0,
       questions: [
-        { id: 'pause', mode: 'any', text: 'Wer hatte um 12 Uhr Pause?', answer: 'Die halbe Schicht. Kessler, Brady drüben vom Pier, ein paar Aushilfen. Hollis war auf Tour.' },
+        { id: 'pause', mode: 'any', text: 'War Milo Kessler heute Mittag im Lager?', answer: 'Kessler? Der war den ganzen Tag hier im Lager. Hab ihn selbst gesehen.', contradiction: { card: 'ana_hf', answer: '(Er kratzt sich am Kopf.) Na gut, mittags war er weg, Eis holen am Markt. Wie jeden Tag. Ich wollte ihm keinen Ärger machen.', gives: ['kessler_mittag'] } },
         { id: 'hollis', mode: 'any', text: 'Wo war Tariq Hollis?', answer: 'Newark, den ganzen Vormittag. Ich schicke Ihnen das Fahrtenbuch und die Mautdaten.', gives: ['hollis_fahrtenbuch'] },
         { id: 'schrift', mode: 'person', requires: 'frachtbrief', text: 'Wer hat diesen Frachtbrief geschrieben?', answer: '(Er hält ihn ins Licht.) Das ist Kessler. Der schreibt mit links und verschmiert alles. Ich sage ihm jede Woche, er soll Bleistift nehmen.', gives: ['kessler_links'] },
         { id: 'brady', mode: 'any', text: 'War Owen Brady heute im Dienst?', answer: 'Brady gehört zur Pier-57-Crew. Laut Schichtplan hat er bis 13 Uhr entladen.', gives: ['brady_schicht'] },
@@ -169,7 +171,7 @@ export const falschgeldCase: CaseDef = {
       id: 'lazarus', name: 'Elias Lazarus', role: 'Inhaber Lazarus Druck & Kopie', place: 'druckerei', hue: 40, fromChapter: 1,
       questions: [
         { id: 'zaehler', mode: 'any', text: 'Wurde Ihre Presse benutzt?', answer: 'Benutzt? (Er lacht trocken.) Laut Zähler habe ich 40.000 Drucke mehr gemacht als je bezahlt wurden. Ich dachte, die Maschine spinnt.', gives: ['zaehler'] },
-        { id: 'nacht', mode: 'person', text: 'Wer hat nachts Zugang?', answer: 'Ich vermiete die Tiefdruckpresse nachts, an eine Dozentin, für Studentenprojekte. Bar, jede Woche. Ich brauchte das Geld, Detective.', gives: ['nachtmiete'] },
+        { id: 'nacht', mode: 'any', text: 'Wer hat nachts Zugang zur Druckerei?', answer: 'Niemand. Ich schließe um sieben ab, dann steht hier alles still.', contradiction: { card: 'zaehler', answer: '(Er sinkt auf einen Stuhl.) Also gut. Ich vermiete die Tiefdruckpresse nachts, an eine Dozentin, für Studentenprojekte. Bar, jede Woche. Ich brauchte das Geld, Detective.', gives: ['nachtmiete'] } },
       ],
     },
     {

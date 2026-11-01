@@ -277,7 +277,7 @@ export const saphirCase: CaseDef = {
       id: 'wynn', name: 'Arthur Wynn', role: 'Versicherungsmakler', place: 'versicherung', hue: 170, fromChapter: 2,
       questions: [
         { id: 'versich', mode: 'any', text: 'Wurde die Versicherung des Saphirs kürzlich geändert?', answer: 'Ja, vor einem Monat. Halvorsen hat sie auf acht Millionen verdoppelt. Ich habe mich auch gewundert.', gives: ['versicherung_hoch'] },
-        { id: 'gutachten', mode: 'person', text: 'Wer kannte das Wertgutachten?', answer: '(Er zögert.) Nur Halvorsen. Und auf seinen ausdrücklichen Wunsch eine Kaufinteressentin: Madame Moreau. Sie hat sich das Dokument sehr genau angesehen.', gives: ['gutachten_moreau'] },
+        { id: 'gutachten', mode: 'any', text: 'Wer kannte das Wertgutachten?', answer: 'Nur Herr Halvorsen, selbstverständlich. Gutachten sind streng vertraulich.', contradiction: { card: 'angebot_moreau', answer: '(Er wird rot.) Na schön. Halvorsen wollte, dass eine Kaufinteressentin das Gutachten sieht: Madame Moreau. Sie hat es sehr genau studiert und nach dem Tresor gefragt.', gives: ['gutachten_moreau'] } },
         { id: 'wo', mode: 'any', text: 'Wo waren Sie diese Woche?', answer: 'Auf einer Konferenz in Chicago. Ich schicke Ihnen meine Hotelbelege.', gives: ['wynn_alibi'] },
       ],
     },

@@ -1,8 +1,14 @@
 import './style.css';
 import { CITIES } from './data/cities';
-import { STORY_CASES, resolveCase } from './cases';
+import { STORY_CASES, TUTORIAL, resolveCase } from './cases';
+import { deleteCustomCase, listCustomCases, saveCustomCase } from './cases/custom';
+import { validateCase } from './cases/validate';
+import type { CaseDef } from './cases/types';
 import { quickId, type Difficulty } from './cases/generator';
-import { Game, type GameMode } from './game/game';
+import { ACTION_COST, Game, type AiLevel, type GameMode, type GameOptions } from './game/game';
+import { computeScore, recordBest } from './game/score';
+import { nextHint } from './game/hints';
+import { Coach } from './ui/coach';
 import type { CityMap, MoveOption, Trace } from './game/types';
 import { MapView, routeColor, type Tool, type Viewer } from './map/MapView';
 import { askText, fill, h, modal, toast } from './ui/dom';
@@ -19,6 +25,12 @@ const loadMap = (cityId: string) => {
   return mapCache.get(url)!;
 };
 let destroyCurrent: (() => void) | null = null;
+const aiOpts: GameOptions = { police: 'normal', fugitive: 'normal' };
+function aiChips(rerender: () => void) {
+  const row = (label: string, key: keyof GameOptions) => h('div', { class: 'ai-row' }, h('small', {}, label),
+    h('div', { class: 'chips' }, ...(['leicht', 'normal', 'schwer'] as AiLevel[]).map((l) => h('button', { class: 'chip' + (aiOpts[key] === l ? ' on' : ''), onclick: () => { aiOpts[key] = l; rerender(); } }, l))));
+  return h('div', { class: 'quick ai' }, h('label', {}, 'Computergegner'), row('KI-Flüchtiger (wenn Sie ermitteln)', 'fugitive'), row('KI-Polizei (wenn Sie fliehen)', 'police'));
+}
 
 // ---------------- Menüs ----------------
 function screen(...children: (Node | string | null | undefined | false)[]) {
@@ -36,6 +48,7 @@ function title() {
     h('div', { class: 'col' },
       auto ? h('button', { class: 'btn big', onclick: () => loadSlot('auto') }, `▶ Fortsetzen`, h('small', { class: 'sub' }, `${auto.meta.title} · ${auto.meta.chapter} · Runde ${auto.meta.round}`)) : null,
       h('button', { class: 'btn big' + (auto ? ' ghost' : ''), onclick: () => { play('click'); cityMenu(); } }, '＋ Neuer Fall'),
+      h('button', { class: 'btn ghost', onclick: () => startNew('nyc', TUTORIAL.id, 'solo') }, '🎓 Tutorial: Erster Arbeitstag'),
       h('button', { class: 'btn ghost', onclick: loadMenu }, 'Spielstand laden'),
       h('div', { class: 'row center' }, h('button', { class: 'btn ghost', onclick: rules }, 'Spielregeln'), muteBtn()),
     ),
@@ -59,6 +72,7 @@ function typeMenu(cityId: string) {
     h('div', { class: 'grid two' },
       h('button', { class: 'tile', onclick: () => { play('click'); storyMenu(cityId); } }, h('div', { class: 'tile-title' }, '📚 Storyfälle'), h('div', { class: 'tile-sub' }, 'Lange, handgeschriebene Fälle in mehreren Akten, mit Wendungen, vielen Zeugen und mehreren Flüchtigen nacheinander.')),
       h('button', { class: 'tile', onclick: () => { play('click'); quickMenu(cityId); } }, h('div', { class: 'tile-title' }, '🎲 Schnellspiel'), h('div', { class: 'tile-sub' }, 'Ein zufällig erzeugter Fall für 15 bis 30 Minuten. Jeder Fall ist anders.')),
+      h('button', { class: 'tile', onclick: () => { play('click'); customMenu(cityId); } }, h('div', { class: 'tile-title' }, '🛠 Eigene Fälle'), h('div', { class: 'tile-sub' }, 'Selbst geschriebene Fälle als JSON-Datei laden, prüfen und spielen. Mit Vorlage.')),
     ),
     back(cityMenu),
   );
@@ -70,6 +84,7 @@ function storyMenu(cityId: string) {
     h('h2', {}, 'Storyfälle'),
     h('div', { class: 'grid two' }, ...cases.map((c) =>
       h('button', { class: 'tile case', onclick: () => { play('click'); roleMenu((mode) => startNew(cityId, c.id, mode), () => storyMenu(cityId)); } },
+        bestBadge(c.id),
         h('div', { class: 'tile-title' }, c.title),
         h('div', { class: 'tile-sub' }, c.subtitle),
         h('p', { class: 'tile-teaser' }, c.teaser),
@@ -79,6 +94,7 @@ function storyMenu(cityId: string) {
 }
 
 function roleMenu(start: (mode: GameMode) => void, onBack: () => void) {
+  const rerender = () => roleMenu(start, onBack);
   screen(
     h('h2', {}, 'Rolle & Modus'),
     h('div', { class: 'grid three' },
@@ -86,12 +102,14 @@ function roleMenu(start: (mode: GameMode) => void, onBack: () => void) {
       h('button', { class: 'tile', onclick: () => start('fugitive') }, h('div', { class: 'tile-title' }, '🦊 Flüchtiger'), h('div', { class: 'tile-sub' }, 'Solo: Sie fliehen, die Polizei wird vom Computer gesteuert und wertet Ihre Spuren aus.')),
       h('button', { class: 'tile', onclick: () => start('hotseat') }, h('div', { class: 'tile-title' }, '👥 2 Spieler'), h('div', { class: 'tile-sub' }, 'An einem Gerät: Eine Person ermittelt, die andere flieht verdeckt.')),
     ),
+    aiChips(rerender),
     back(onBack),
   );
 }
 
 function quickMenu(cityId: string) {
   let difficulty: Difficulty = 'normal', escape = true, seed = 1 + Math.floor(Math.random() * 999999);
+  const best = bestOf('quick:solo');
   const render = () => screen(
     h('h2', {}, 'Schnellspiel'),
     h('div', { class: 'quick' },
@@ -105,7 +123,9 @@ function quickMenu(cityId: string) {
       h('label', {}, 'Fallnummer'),
       h('div', { class: 'row' }, h('code', { class: 'seed' }, '#' + seed), h('button', { class: 'btn ghost small', onclick: () => { seed = 1 + Math.floor(Math.random() * 999999); play('click'); render(); } }, '🎲 neu würfeln')),
       h('small', {}, 'Mit derselben Fallnummer bekommt jeder denselben Fall, zum Beispiel für einen Vergleich mit Freunden.'),
+      best ? h('small', { class: 'best' }, `🏆 Ihr Bestwert als Ermittler: ${best} Punkte`) : null,
     ),
+    aiChips(() => render()),
     h('div', { class: 'grid three' },
       h('button', { class: 'tile', onclick: () => startNew(cityId, quickId({ seed, difficulty, escape }), 'solo') }, h('div', { class: 'tile-title' }, '🕵️ Ermitteln')),
       h('button', { class: 'tile', onclick: () => startNew(cityId, quickId({ seed, difficulty, escape }), 'fugitive') }, h('div', { class: 'tile-title' }, '🦊 Fliehen')),
@@ -143,7 +163,52 @@ async function startNew(cityId: string, caseId: string, mode: GameMode) {
   screen(h('p', { class: 'tag' }, 'Lade Karte…'));
   const map = await loadMap(cityId);
   const def = resolveCase(caseId, map)!;
-  startGame(new Game(map, def, mode));
+  startGame(new Game(map, def, mode, undefined, { ...aiOpts }));
+}
+
+function bestOf(key: string): number { try { return JSON.parse(localStorage.getItem('dt-best-v1') ?? '{}')[key] ?? 0; } catch { return 0; } }
+function bestBadge(caseId: string) {
+  const b = Math.max(bestOf(caseId + ':solo'), bestOf(caseId + ':hotseat'));
+  return b ? h('div', { class: 'best-badge' }, `🏆 ${b}`) : null;
+}
+
+function customMenu(cityId: string) {
+  const list = listCustomCases();
+  const file = h('input', { type: 'file', accept: '.json,application/json', style: { display: 'none' } }) as HTMLInputElement;
+  file.addEventListener('change', async () => {
+    const f = file.files?.[0]; if (!f) return;
+    let def: CaseDef;
+    try { def = JSON.parse(await f.text()); } catch { toast('Die Datei ist kein gültiges JSON.', 'bad'); return; }
+    const errs = validateCase(def);
+    if (errs.length) {
+      modal(h('div', { class: 'rules' }, h('h3', {}, `❌ ${errs.length} Problem(e) im Fall`), h('ul', {}, ...errs.slice(0, 40).map((e) => h('li', {}, e)))));
+      return;
+    }
+    def.kind = 'story'; def.cityId = cityId;
+    if (!def.id.startsWith('custom:')) def.id = 'custom:' + def.id;
+    saveCustomCase(def);
+    toast(`„${def.title}“ wurde geladen.`, 'good');
+    customMenu(cityId);
+  });
+  screen(
+    h('h2', {}, 'Eigene Fälle'),
+    h('p', { class: 'hint narrow' }, 'Schreiben Sie einen Fall als JSON-Datei, im selben Format wie die eingebauten Fälle. Die Vorlage ist der Tutorial-Fall. Die Feldbeschreibung steht im Repository unter docs/FALL-FORMAT.md. Beim Laden wird der Fall automatisch geprüft.'),
+    h('div', { class: 'row center wrap' },
+      h('button', { class: 'btn', onclick: () => file.click() }, '📂 Fall-Datei laden'),
+      h('button', { class: 'btn ghost', onclick: () => download('vorlage-fall.json', JSON.stringify({ ...TUTORIAL, id: 'mein-fall', title: 'Mein Fall' }, null, 2)) }, '⬇ Vorlage herunterladen'),
+      file,
+    ),
+    list.length ? h('div', { class: 'saves' }, ...list.map((c) => h('div', { class: 'save-row' },
+      h('div', { class: 'grow' }, h('b', {}, c.title), h('small', {}, `${c.subtitle ?? ''} · ${c.chapters.length} Akt(e)`)),
+      h('button', { class: 'btn', onclick: () => roleMenu((mode) => startNew(cityId, c.id, mode), () => customMenu(cityId)) }, 'Spielen'),
+      h('button', { class: 'btn ghost small', onclick: () => download(c.id.replace(/[^a-z0-9-]/gi, '_') + '.json', JSON.stringify(c, null, 2)) }, '⬇'),
+      h('button', { class: 'btn ghost small', onclick: () => { if (confirm('Fall löschen?')) { deleteCustomCase(c.id); customMenu(cityId); } } }, '🗑')))) : h('p', { class: 'hint' }, 'Noch keine eigenen Fälle geladen.'),
+    back(() => typeMenu(cityId)),
+  );
+}
+function download(name: string, text: string) {
+  const a = h('a', { href: URL.createObjectURL(new Blob([text], { type: 'application/json' })), download: name });
+  document.body.append(a); a.click(); a.remove();
 }
 
 function rules() {
@@ -168,8 +233,21 @@ function rules() {
     h('p', {}, 'Mit Markierung, Person, Radius, Linie und Notiz zeichnen Sie Ihre Überlegungen auf die Karte. Auf der Pinnwand verbinden Sie Hinweise mit roten Fäden. Im Verhörraum telefonieren Sie (1 EP) oder befragen Personen vor Ort. Festgenommene können Sie jederzeit im Revier befragen.'),
     h('h4', {}, 'Festnahme'),
     h('p', {}, 'Steht eine Einheit am Knoten des Flüchtigen, gibt es Sichtkontakt. Festnehmen dürfen Sie nur mit einem Haftbefehl gegen die richtige Person. Ein falscher Antrag kostet 2 Runden.'),
+    h('h4', {}, 'Spezialaktionen (Einsatzpunkte)'),
+    h('ul', {},
+      h('li', {}, '📡 Suchgebiet (1 EP): Macht Fundstücke im Umkreis von 220 m sichtbar.'),
+      h('li', {}, '🚧 Straßensperre (1 EP): Den gewählten Knoten kann der Flüchtige im nächsten Zug nicht betreten.'),
+      h('li', {}, '👁 Observation (1 EP): Der Knoten wird dauerhaft überwacht. Betritt der Flüchtige ihn, gibt es sicher eine Meldung.'),
+      h('li', {}, '🚁 Hubschrauber (2 EP): Ein Wärmebild im Radius von 500 m zeigt den Flüchtigen genau, oder dass er nicht dort ist.'),
+    ),
+    h('h4', {}, 'Verhöre & Lügen'),
+    h('p', {}, 'Manche Personen lügen. Wenn eine Aussage nicht zu Ihren Beweisen passt, befragen Sie die Person vor Ort und legen das passende Beweisstück vor. Ein falsches Beweisstück kostet Wertung.'),
+    h('h4', {}, 'Hinterhalt'),
+    h('p', {}, 'In manchen Akten kündigt der Täter sein Ziel als Rätsel an. Lila Ringe markieren die möglichen Ziele. Warten Sie mit einer Einheit am richtigen Ort, dann ertappen Sie ihn auf frischer Tat, auch ohne Haftbefehl.'),
+    h('h4', {}, 'Tipps & Wertung'),
+    h('p', {}, '💡 gibt einen Tipp und kostet 40 Punkte. Am Ende bekommen Sie Punkte und einen Rang. Gesparte Runden und Erkenntnisse zählen positiv, gerissene Fäden, falsche Haftbefehle und Tipps negativ.'),
     h('h4', {}, 'Als Flüchtiger'),
-    h('p', {}, 'Die KI-Polizei sieht nur, was auch ein menschlicher Ermittler sehen würde, also Ihre Spuren. Nach einigen Runden hat sie Ihren Namen und darf Sie verhaften.'),
+    h('p', {}, 'Die KI-Polizei sieht nur, was auch ein menschlicher Ermittler sehen würde, also Ihre Spuren. Nach einigen Runden hat sie Ihren Namen und darf Sie verhaften. Ihre Hilfsmittel: 🚲 Leihrad (zwei Schritte weit, hinterlässt eine Ausleih-Spur), 🎭 Verkleidung (zwei Runden lang erkennen Sie weder Kameras noch Hubschrauber) und 🧭 falsche Fährte (legt eine gefälschte U-Bahn-Spur).'),
   ));
 }
 
@@ -186,13 +264,18 @@ function startGame(game: Game) {
   const mapHost = h('div', { class: 'map-host' });
   const tools = h('div', { class: 'toolbar' });
   const side = h('aside', { class: 'side' });
-  const mapView = h('section', { class: 'view view-map' }, mapHost, tools, side);
+  const timeline = h('div', { class: 'timeline' });
+  const sideToggle = h('button', { class: 'side-toggle', title: 'Seitenleiste ein-/ausblenden', onclick: () => { side.classList.toggle('collapsed'); sideToggle.classList.toggle('collapsed'); } }, '☰');
+  if (window.innerWidth < 760) { side.classList.add('collapsed'); sideToggle.classList.add('collapsed'); }
+  const mapView = h('section', { class: 'view view-map' }, mapHost, tools, side, sideToggle, timeline);
+  const tl = { upTo: 0, only: false, active: false };
+  const coach = def.id === TUTORIAL.id && game.mode !== 'fugitive' ? new Coach(() => render()) : null;
   const pin = new Pinboard(game, () => switchView('talk'));
   const talk = new InterrogationRoom(game, (place) => {
     const n = game.graph.nodes[game.graph.placeIndex.get(place)!]; switchView('map'); mv.focus(n.x, n.y, Math.max(mv.scale, 0.6));
   });
   const overlay = h('div', { class: 'overlay-host' });
-  fill(app, h('div', { class: 'game' }, top, h('main', {}, mapView, pin.el, talk.el), overlay));
+  fill(app, h('div', { class: 'game' }, top, h('main', {}, mapView, pin.el, talk.el), overlay, coach?.el ?? null));
 
   const mv = new MapView(mapHost, map, game, {
     viewer,
@@ -200,19 +283,22 @@ function startGame(game: Game) {
     onFugitivePick: (opts) => chooseFugitiveMove(opts),
     askText,
     onHint: (t) => toast(t, 'info'),
+    traceFilter: (t) => !tl.active || (tl.only ? t.round === tl.upTo : t.round <= tl.upTo),
   });
   const focusStart = () => { const n = game.graph.nodes[game.fugitive.path[0].node]; mv.focus(n.x, n.y, 0.55); };
   setTimeout(focusStart, 50);
-  destroyCurrent = () => { mv.destroy(); unsub(); };
+  const coachTimer = coach ? window.setInterval(() => coach.update({ game, view, scale: mv.scale }), 400) : 0;
+  destroyCurrent = () => { mv.destroy(); unsub(); clearInterval(coachTimer); };
 
   function switchView(v: typeof view) { view = v; play('click'); render(); }
 
   function chooseFugitiveMove(opts: MoveOption[]) {
     const n = game.graph.nodes[opts[0].to];
     const exits = game.escapeNodes();
-    const desc: Record<string, string> = { foot: '🚶 Zu Fuß: Kameras können dich erfassen.', subway: '🚇 U-Bahn: Einstieg und Linie werden bekannt.', taxi: '🚕 Taxi: Das Ziel ist ungefähr bekannt. Es bleiben ' + game.fugitive.taxis + ' Fahrten.', stay: '⏸ Abtauchen' };
+    const desc: Record<string, string> = { bike: '🚲 Leihrad (zwei Schritte): Die Ausleihstation wird bekannt.', foot: '🚶 Zu Fuß: Kameras können dich erfassen.', subway: '🚇 U-Bahn: Einstieg und Linie werden bekannt.', taxi: '🚕 Taxi: Das Ziel ist ungefähr bekannt. Es bleiben ' + game.fugitive.taxis + ' Fahrten.', stay: '⏸ Abtauchen' };
     const close = modal(h('div', { class: 'ask' },
       h('h3', {}, 'Nach ' + n.name + (n.camera ? ' 📹' : '') + (exits.includes(opts[0].to) ? ' ⇲' : '')),
+      game.ambushTarget() === opts[0].to && game.chapter.ambush ? h('p', { class: 'hint' }, game.round >= game.chapter.ambush.fromRound ? 'Dein Ziel! Wenn dort niemand wartet, gelingt der Coup.' : `Dein Ziel, aber erst ab Runde ${game.chapter.ambush.fromRound}. Wenn dort jetzt schon Polizei wartet, bist du dran.`) : null,
       exits.includes(opts[0].to) && game.chapter.escape ? h('p', { class: 'hint' }, game.round >= game.chapter.escape.fromRound ? 'Der Fluchtpunkt ist offen. Damit entkommst du!' : `Der Fluchtpunkt öffnet erst ab Runde ${game.chapter.escape.fromRound}.`) : null,
       ...opts.map((o) => h('button', { class: 'btn wide', onclick: () => { close(); game.applyFugitiveMove(o); } }, desc[o.mode] + (o.route ? ` (Linie ${o.route})` : ''))),
       h('button', { class: 'btn ghost', onclick: () => close() }, 'Abbrechen'),
@@ -221,7 +307,10 @@ function startGame(game: Game) {
 
   const TOOLS: [Tool, string, string][] = [
     ['select', '🖐', 'Auswählen / Einheiten bewegen / Fundstücke aufheben'],
-    ['search', '📡', 'Suchgebiet einrichten (1 EP)'],
+    ['search', '📡', `Suchgebiet einrichten (${ACTION_COST.search} EP)`],
+    ['roadblock', '🚧', `Straßensperre auf einen Knoten (${ACTION_COST.roadblock} EP)`],
+    ['observe', '👁', `Observation: Knoten dauerhaft überwachen (${ACTION_COST.observe} EP)`],
+    ['heli', '🚁', `Hubschrauber mit Wärmebild, 500 m Radius (${ACTION_COST.heli} EP)`],
     ['pin', '📍', 'Markierung setzen'],
     ['person', '👤', 'Person markieren'],
     ['circle', '◯', 'Suchradius ziehen'],
@@ -239,7 +328,7 @@ function startGame(game: Game) {
     ];
     if (viewer() !== 'detective') { fill(tools, ...zoomBtns); return; }
     fill(tools,
-      ...TOOLS.map(([t, icon, tip]) => h('button', { class: 'tool' + (mv.tool === t ? ' on' : ''), title: tip, onclick: () => { play('click'); mv.tool = t; mv.selectedUnit = null; renderTools(); if (t === 'search') toast('Klicken Sie auf die Karte, um ein Suchgebiet mit 220 m Radius einzurichten.', 'info'); } }, icon)),
+      ...TOOLS.map(([t, icon, tip]) => h('button', { class: 'tool' + (mv.tool === t ? ' on' : ''), title: tip, onclick: () => { play('click'); mv.tool = t; mv.selectedUnit = null; renderTools(); const tipText: Partial<Record<Tool, string>> = { search: 'Klicken Sie auf die Karte, um ein Suchgebiet mit 220 m Radius einzurichten.', roadblock: 'Klicken Sie auf einen Knoten: Dort kommt der Flüchtige im nächsten Zug nicht durch.', observe: 'Klicken Sie auf einen Knoten, der ab jetzt dauerhaft überwacht wird.', heli: 'Klicken Sie auf den Mittelpunkt des Gebiets, das der Hubschrauber absuchen soll.' }; if (tipText[t]) toast(tipText[t]!, 'info'); } }, icon)),
       h('div', { class: 'sep' }),
       ...COLORS.map((c) => h('button', { class: 'swatch' + (mv.color === c ? ' on' : ''), style: { background: c }, onclick: () => { mv.color = c; renderTools(); } })),
       h('div', { class: 'sep' }),
@@ -247,13 +336,35 @@ function startGame(game: Game) {
     );
   }
 
-  function traceIcon(t: Trace) { return { start: '✕', cctv: '📹', metrocard: '🚇', taxi: '🚕', ping: '📶', sighting: '👁', item: '◆' }[t.kind]; }
+  function traceIcon(t: Trace) { return { start: '✕', cctv: '📹', metrocard: '🚇', taxi: '🚕', ping: '📶', sighting: '👁', item: '◆', bike: '🚲', heli: '🚁', clear: '🚁' }[t.kind]; }
+
+  function renderTimeline() {
+    if (game.phase === 'chapter-intro' || game.round < 2) { fill(timeline); timeline.style.display = 'none'; return; }
+    timeline.style.display = '';
+    const max = Math.min(game.round, game.chapter.maxRounds);
+    if (!tl.active) tl.upTo = max;
+    const slider = h('input', { type: 'range', min: 0, max, value: tl.upTo }) as HTMLInputElement;
+    slider.addEventListener('input', () => { tl.upTo = +slider.value; tl.active = true; lab.textContent = labelText(); });
+    const labelText = () => (tl.active ? (tl.only ? `nur Runde ${tl.upTo}` : `Spuren bis Runde ${tl.upTo}`) : 'alle Spuren');
+    const lab = h('span', { class: 'tl-label' }, labelText());
+    fill(timeline, h('span', {}, '⏱'), slider, lab,
+      h('button', { class: 'chip' + (tl.only ? ' on' : ''), onclick: () => { tl.only = !tl.only; tl.active = true; renderTimeline(); } }, 'nur diese Runde'),
+      tl.active ? h('button', { class: 'chip', onclick: () => { tl.active = false; tl.only = false; renderTimeline(); } }, 'alle') : null);
+  }
+
+  function showHint() {
+    if (!confirm('Einen Tipp ansehen? Das kostet 40 Punkte in der Wertung.')) return;
+    const text = nextHint(game);
+    play('found');
+    modal(h('div', { class: 'ask' }, h('h3', {}, '💡 Tipp'), h('p', {}, text), h('small', { class: 'hint' }, `Bisher benutzte Tipps: ${game.stats.hints}`)));
+  }
 
   function objectivePanel() {
     const ch = game.chapter;
     return h('div', { class: 'panel objective-panel' },
       h('h3', {}, `Akt ${game.chapterIdx + 1}/${def.chapters.length} · ${ch.title}`),
       h('p', {}, viewer() === 'fugitive' ? ch.fugitiveIntro : ch.objective),
+      ch.ambush ? h('p', { class: 'warnline amb' }, viewer() === 'fugitive' ? `🎯 Dein Ziel: ${def.places[ch.ambush.target].name}, ab Runde ${ch.ambush.fromRound}` : `🎯 Mögliche Ziele (ab Runde ${ch.ambush.fromRound}): ` + ch.ambush.candidates.map((p) => def.places[p].name).join(', ')) : null,
       ch.escape ? h('p', { class: 'warnline' }, `⇲ Fluchtpunkte ${game.round >= ch.escape.fromRound ? 'OFFEN' : 'ab Runde ' + ch.escape.fromRound}: ` + ch.escape.places.map((p) => def.places[p].name).join(', ')) : null,
     );
   }
@@ -269,7 +380,12 @@ function startGame(game: Game) {
           h('p', {}, `🚕 Taxifahrten: ${game.fugitive.taxis} · Runde ${game.round}/${game.chapter.maxRounds}`),
           h('p', { class: game.warrant ? 'warnline' : '' }, game.warrant ? '⚠️ Es gibt einen Haftbefehl gegen dich. Jede Einheit kann dich festnehmen, und die Kameras erkennen dich öfter.' : 'Noch kennt die Polizei deinen Namen nicht.'),
           game.fugitive.movesLeft > 1 ? h('p', { class: 'warnline' }, `Vorsprung: noch ${game.fugitive.movesLeft} Züge`) : null,
-          h('div', { class: 'legend' }, h('span', { class: 'lg foot' }, 'zu Fuß'), h('span', { class: 'lg sub' }, 'U-Bahn'), h('span', { class: 'lg taxi' }, 'Taxi')),
+          h('div', { class: 'legend' }, h('span', { class: 'lg foot' }, 'zu Fuß'), h('span', { class: 'lg bike' }, 'Rad'), h('span', { class: 'lg sub' }, 'U-Bahn'), h('span', { class: 'lg taxi' }, 'Taxi')),
+          game.fugitive.disguise > 0 ? h('p', { class: 'okline' }, `🎭 Verkleidet: noch ${game.fugitive.disguise} Runde(n) unerkannt`) : null,
+          game.fugitive.decoyArmed ? h('p', { class: 'okline' }, '🧭 Die falsche Fährte wird bei deinem nächsten Zug gelegt.') : null,
+          game.phase === 'fugitive' && (game.fugitive.gadgets.disguise > 0 || game.fugitive.gadgets.decoy > 0) ? h('div', { class: 'row wrap' },
+            game.fugitive.gadgets.disguise > 0 ? h('button', { class: 'btn small', onclick: () => game.useDisguise() }, `🎭 Verkleidung (${game.fugitive.gadgets.disguise}×)`) : null,
+            game.fugitive.gadgets.decoy > 0 && !game.fugitive.decoyArmed ? h('button', { class: 'btn small', onclick: () => game.armDecoy() }, `🧭 Falsche Fährte (${game.fugitive.gadgets.decoy}×)`) : null) : null,
           h('p', { class: 'hint' }, 'Klicke auf einen markierten Knoten. Rote Punkte sind Kameras.'),
           game.phase === 'fugitive' ? h('button', { class: 'btn wide', onclick: () => game.applyFugitiveMove({ to: game.fugitive.node, mode: 'stay' }) }, '⏸ Abtauchen (bleiben, keine Spur)') : null,
         ),
@@ -336,6 +452,7 @@ function startGame(game: Game) {
       ) : h('nav', { class: 'tabs' }, h('span', { class: 'fug-label' }, '🦊 ' + (game.phase === 'fugitive' ? 'Dein Zug' : 'Flucht'))),
       h('div', { class: 'grow' }),
       det && game.phase === 'detective' ? h('button', { class: 'btn end', onclick: () => { mv.selectedUnit = null; game.endDetectiveTurn(); } }, 'Runde beenden ▶') : null,
+      det && game.phase === 'detective' ? h('button', { class: 'btn ghost small', title: 'Tipp (kostet 40 Punkte)', onclick: showHint }, '💡') : null,
       h('button', { class: 'btn ghost small', title: 'Speichern', onclick: saveDialog }, '💾'),
       muteBtn(),
       h('button', { class: 'btn ghost small', title: 'Regeln', onclick: rules }, '?'),
@@ -371,6 +488,15 @@ function startGame(game: Game) {
       const detWin = r.winner === 'detectives';
       const playerWon = fugMode ? !detWin : detWin;
       const chapterOnly = detWin && !r.final;
+      let scoreBox: HTMLElement | null = null;
+      if (r.final || !detWin) {
+        const sc = computeScore(game);
+        const best = game.mode !== 'hotseat' ? recordBest(def.id, game.mode, sc) : null;
+        scoreBox = h('div', { class: 'scorebox' },
+          h('div', { class: 'rank' }, '★'.repeat(sc.stars + 1) + '☆'.repeat(4 - sc.stars), h('b', {}, sc.rank)),
+          h('div', { class: 'points' }, `${sc.points} Punkte`, best ? h('small', {}, best.isNew ? ' · 🏆 neuer Bestwert!' : ` · Bestwert ${best.best}`) : null),
+          h('table', {}, ...sc.lines.filter(([, v]) => v !== 0).map(([k, v]) => h('tr', {}, h('td', {}, k), h('td', { class: v < 0 ? 'neg' : 'pos' }, (v > 0 ? '+' : '') + v)))));
+      }
       const stats = h('p', { class: 'hint' }, `Erkenntnisse: ${[...game.board.keys()].filter((k) => game.cards[k].kind === 'erkenntnis').length} · Fäden: ${game.stats.threads} (gerissen: ${game.stats.wrongThreads}) · Falsche Haftbefehle: ${game.stats.wrongWarrants}`);
       const buttons: (HTMLElement | null)[] = [];
       if (chapterOnly) buttons.push(h('button', { class: 'btn big', onclick: () => { reveal = false; game.nextChapter(); } }, `Weiter zu Akt ${game.chapterIdx + 2} ▶`));
@@ -385,6 +511,7 @@ function startGame(game: Game) {
         ...(detWin ? ch.outro.map((p) => h('p', {}, p)) : []),
         detWin && r.final ? h('div', { class: 'epilogue' }, h('h4', {}, 'Epilog'), ...def.epilogue.map((p) => h('p', {}, p))) : null,
         chapterOnly && fugMode ? h('p', { class: 'warnline' }, `Im nächsten Akt spielst du ${def.suspects.find((s) => s.id === def.chapters[game.chapterIdx + 1].culprit)!.name}.`) : null,
+        scoreBox,
         stats,
         h('div', { class: 'row center wrap' }, ...buttons.filter(Boolean) as HTMLElement[]))));
     } else if (game.phase === 'over' && reveal) {
@@ -397,7 +524,8 @@ function startGame(game: Game) {
     mapView.classList.toggle('active', view === 'map');
     pin.el.classList.toggle('active', view === 'board');
     talk.el.classList.toggle('active', view === 'talk');
-    renderTop(); renderTools(); renderSide(); renderOverlay();
+    renderTop(); renderTools(); renderSide(); renderOverlay(); renderTimeline();
+    coach?.update({ game, view, scale: mv.scale });
     if (view === 'board') pin.render();
     if (view === 'talk') talk.render();
     if (game.lastEvent) { toast(game.lastEvent.text, game.lastEvent.kind); game.lastEvent = null; }

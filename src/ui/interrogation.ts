@@ -1,6 +1,6 @@
 import type { Game } from '../game/game';
 import type { Contact } from '../cases/types';
-import { fill, h, portrait, toast } from './dom';
+import { fill, h, modal, portrait, toast } from './dom';
 
 export class InterrogationRoom {
   el: HTMLElement;
@@ -32,6 +32,22 @@ export class InterrogationRoom {
     fill(this.el, list, c ? this.renderContact(c, unlocked.indexOf(c)) : h('div', { class: 'talk-main empty' }, 'Noch keine Kontakte.'));
   }
 
+  private presentDialog(c: Contact) {
+    const g = this.game;
+    const cards = [...g.board.keys()].filter((k) => g.cards[k].kind !== 'dossier');
+    const close = modal(h('div', { class: 'ask' },
+      h('h3', {}, `Was legen Sie ${c.name} vor?`),
+      h('p', { class: 'hint' }, 'Wenn eine Aussage nicht zu einem Beweis passt, konfrontieren Sie die Person damit. Ein falsches Beweisstück kostet etwas Wertung.'),
+      h('div', { class: 'present-list' }, ...cards.map((k) => h('button', { class: 'chip', onclick: () => {
+        close();
+        const ans = g.present(c, k);
+        if (ans) toast('⚡ Widerspruch aufgedeckt!', 'good');
+        else toast(`${c.name} zuckt mit den Schultern: „Und? Was hat das mit mir zu tun?“`, 'bad');
+        this.render();
+      } }, (g.cards[k].icon ?? '') + ' ' + g.cards[k].title))),
+    ));
+  }
+
   private renderContact(c: Contact, idx: number) {
     const g = this.game;
     const place = g.def.places[c.place];
@@ -57,8 +73,14 @@ export class InterrogationRoom {
       ),
       h('div', { class: 'transcript ' + (this.mode ?? '') },
         transcript.length === 0 && !this.mode ? h('p', { class: 'hint' }, 'Wählen Sie Telefon oder persönliches Verhör. Vor Ort erfahren Sie oft mehr, und Sie können Beweisstücke vorlegen.') : null,
-        ...transcript.flatMap((q) => [h('div', { class: 'q' }, '» ' + q.text), h('div', { class: 'a' }, q.answer)]),
+        ...transcript.flatMap((q) => {
+          const res = q.contradiction && g.resolved.includes(c.id + '.' + q.id);
+          return [h('div', { class: 'q' }, '» ' + q.text), h('div', { class: 'a' + (res ? ' lie' : '') }, q.answer),
+            res ? h('div', { class: 'q contra' }, `⚡ Widerspruch: ${g.cards[q.contradiction!.card].title} vorgelegt`) : null,
+            res ? h('div', { class: 'a' }, q.contradiction!.answer) : null];
+        }),
       ),
+      this.mode === 'person' && g.phase === 'detective' ? h('button', { class: 'btn present', onclick: () => this.presentDialog(c) }, '🗂️ Beweisstück vorlegen …') : null,
       this.mode ? h('div', { class: 'questions' },
         ...qs.map((q) => {
           const needCard = q.requires && !g.board.has(q.requires);

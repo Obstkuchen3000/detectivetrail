@@ -12,6 +12,17 @@ npm run dev        # Entwicklungsserver auf http://localhost:5173
 npm run build      # Typprüfung + Produktions-Build nach dist/
 ```
 
+## Online spielen (GitHub Pages)
+
+Das Repository enthält einen Workflow (`.github/workflows/pages.yml`), der das Spiel bei jedem Push auf `main` baut und veröffentlicht. Einmalig einrichten:
+
+1. **Settings → Pages → Build and deployment → Source:** „GitHub Actions“ wählen.
+2. **Settings → Secrets and variables → Actions → Reiter „Variables“ → New repository variable:** Name `PAGES_ENABLED`, Wert `true`.
+3. **Actions → „Auf GitHub Pages veröffentlichen“ → Run workflow** (oder einfach etwas auf `main` pushen).
+
+Danach ist das Spiel unter `https://<benutzername>.github.io/detectivetrail/` erreichbar.
+Hinweis: Für **private** Repositories gibt es GitHub Pages nur mit einem kostenpflichtigen Plan (z. B. GitHub Pro). Alternativ kann das Repository öffentlich gestellt werden.
+
 ## Spielprinzip
 
 | Ansicht | Inhalt |
@@ -30,6 +41,7 @@ In manchen Akten öffnen ab einer bestimmten Runde **Fluchtpunkte** wie Heliport
 - **Storyfälle** in drei Akten, jeder Akt mit eigenem Flüchtigen und einer Wendung am Ende:
   - *Der Blaue Reiher*: Saphirraub, dann der Kurier mit dem Stein, dann die Auftraggeberin
   - *Falsches Spiel*: Falschgeldbote, dann der Fälscher, dann der Bankier
+  - *Der Uhrmacher*: Rätselbriefe mit zwei Hinterhalt-Akten, dazwischen die Jagd auf den Meister
 - **Schnellspiel**: prozedural erzeugte Fälle mit einer Fallnummer (Seed). Wählbar sind Schwierigkeit und Fluchtpunkte.
   Der Generator garantiert, dass die Indizienkette genau eine verdächtige Person übrig lässt.
 
@@ -38,6 +50,25 @@ In manchen Akten öffnen ab einer bestimmten Runde **Fluchtpunkte** wie Heliport
 - **Ermittler (Solo)** gegen einen Computer-Flüchtigen
 - **Flüchtiger (Solo)** gegen Computer-Ermittler. Die KI wertet nur die öffentlich sichtbaren Spuren aus und kennt Ihre Position nicht.
 - **2 Spieler** an einem Gerät (Hotseat mit Übergabe-Bildschirm)
+
+### Ermittlungswerkzeuge
+
+- **Spezialaktionen** für Einsatzpunkte: Suchgebiet, Straßensperre, Observation und Hubschrauber mit Wärmebild
+- **Lügen im Verhör:** Aussagen, die nicht zu den Beweisen passen, mit dem richtigen Beweisstück vor Ort kippen
+- **Hinterhalt-Akte:** Das Ziel des Täters aus einem Rätsel ableiten und dort auf frischer Tat zugreifen
+- **Zeitachse:** Spuren bis zu einer Runde oder nur einer bestimmten Runde einblenden
+- **Tipps (💡)** gegen Punktabzug und eine **Wertung mit Rang** und lokalem Bestwert am Ende
+- **Tutorial „Erster Arbeitstag“** mit Coach, der Schritt für Schritt durch alle Ansichten führt
+
+### Für Flüchtige
+
+- 🚲 Leihrad (zwei Schritte, Ausleih-Spur), 🎭 Verkleidung (zwei Runden unsichtbar für Kameras und Hubschrauber) und 🧭 falsche Fährte (gefälschte U-Bahn-Spur)
+- Getrennt einstellbare Stärke von KI-Flüchtigem und KI-Polizei (leicht, normal, schwer)
+
+### Eigene Fälle
+
+Fälle lassen sich als JSON-Datei schreiben und im Spiel unter **🛠 Eigene Fälle** laden. Dabei werden sie automatisch geprüft.
+Das Format ist in [`docs/FALL-FORMAT.md`](docs/FALL-FORMAT.md) beschrieben. Eine Vorlage kann im Spiel heruntergeladen werden.
 
 ### Komfort
 

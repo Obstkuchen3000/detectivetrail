@@ -103,6 +103,12 @@ export class CityGraph {
     this.hopCache.set(t, d);
     return d;
   }
+  /** Leihrad: alle Knoten in genau zwei Fußschritten */
+  bikeTargets(v: number): number[] {
+    const one = new Set(this.walk[v]); const res = new Set<number>();
+    for (const a of one) for (const b of this.walk[a]) if (b !== v && !one.has(b)) res.add(b);
+    return [...res];
+  }
   /** Ziele einer U-Bahn-Fahrt von v auf Linie r (max. SUBWAY_MAX_STOPS) */
   subwayTargets(v: number, r: string): number[] {
     const depth = new Map<number, number>([[v, 0]]); const q = [v];
@@ -127,6 +133,7 @@ export class CityGraph {
     const seen = new Set<string>();
     const add = (o: MoveOption) => { const k = o.to + o.mode + (o.route ?? ''); if (blocked.has(o.to) || o.to === v || seen.has(k)) return; seen.add(k); opts.push(o); };
     for (const w of this.walk[v]) add({ to: w, mode: 'foot' });
+    for (const w of this.bikeTargets(v)) add({ to: w, mode: 'bike' });
     if (this.nodes[v].kind === 'station') {
       const letters = new Set(this.sub[v].flatMap((e) => e.routes.split('')));
       for (const r of letters)

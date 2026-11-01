@@ -1,10 +1,11 @@
 import type { Game } from '../game/game';
 import type { Annotation, CityMap, MoveOption, Trace } from '../game/types';
 import { UNIT_REACH } from '../game/graph';
+import { ACTION_COST, HELI_RADIUS } from '../game/game';
 import { dist } from '../game/geo';
 import { Wimmel, drawClue, drawFig } from './wimmel';
 
-export type Tool = 'select' | 'pin' | 'person' | 'circle' | 'line' | 'note' | 'search' | 'erase';
+export type Tool = 'select' | 'pin' | 'person' | 'circle' | 'line' | 'note' | 'search' | 'roadblock' | 'observe' | 'heli' | 'erase';
 export type Viewer = 'detective' | 'fugitive' | 'reveal';
 
 const ROUTE_COLORS: Record<string, string> = {
@@ -30,6 +31,8 @@ export interface MapCallbacks {
   onFugitivePick: (opts: MoveOption[]) => void;
   askText: (title: string, placeholder: string, options?: string[]) => Promise<string | null>;
   onHint: (text: string) => void;
+  /** Zeitachse: welche Spuren gezeigt werden */
+  traceFilter?: (t: Trace) => boolean;
 }
 
 export class MapView {
@@ -197,12 +200,19 @@ export class MapView {
         if (this.scale < ITEM_SCALE && g.searchAreas.some((s) => dist(s.x, s.y, wx, wy) < s.r)) this.cb.onHint('Zoomen Sie weiter hinein (Mausrad/Pinch), um Fundstücke im Suchgebiet zu erkennen.');
         break;
       }
-      case 'search':
+      case 'search': case 'heli': case 'roadblock': case 'observe': {
         if (g.phase !== 'detective') return;
-        if (!g.canSpend()) { this.cb.onHint('Keine Einsatzpunkte mehr in dieser Runde.'); return; }
-        g.placeSearch(wx, wy);
+        if (!g.canSpend(ACTION_COST[this.tool])) { this.cb.onHint(`Dafür fehlen Einsatzpunkte (benötigt: ${ACTION_COST[this.tool]}).`); return; }
+        if (this.tool === 'search') g.placeSearch(wx, wy);
+        else if (this.tool === 'heli') g.heliScan(wx, wy);
+        else {
+          const n = this.nodeAt(sx, sy, undefined, 20);
+          if (n < 0) { this.cb.onHint('Klicken Sie direkt auf einen Knoten (Station oder Ort).'); return; }
+          if (this.tool === 'roadblock') g.placeRoadblock(n); else g.placeObservation(n);
+        }
         this.tool = 'select'; g.emit();
         break;
+      }
       case 'pin': case 'note': {
         const t = await this.cb.askText(this.tool === 'pin' ? 'Markierung beschriften' : 'Notiz', this.tool === 'pin' ? 'z. B. Versteck?' : 'Text…');
         if (t !== null) g.addAnnotation({ type: this.tool, x: wx, y: wy, text: t, color: this.color });
@@ -321,6 +331,7 @@ export class MapView {
     this.drawAnnotations();
     this.drawTraces(t);
     this.drawExits(t);
+    this.drawActions(t);
     this.drawNodes(viewer);
     if (viewer === 'fugitive' || viewer === 'reveal') this.drawFugitive(viewer, t);
     this.drawUnits(t);
@@ -395,7 +406,9 @@ export class MapView {
 
   private drawTraces(t: number) {
     const ctx = this.ctx, g = this.game;
+    const viewer = this.cb.viewer();
     for (const tr of g.traces) {
+      if (this.cb.traceFilter && !this.cb.traceFilter(tr)) continue;
       const age = g.round - tr.round;
       const alpha = Math.max(0.35, 1 - age * 0.12);
       const p = this.toScreen(tr.x, tr.y);
@@ -404,20 +417,57 @@ export class MapView {
       ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = 2;
       if (tr.r) {
         const R = tr.r * this.scale;
-        ctx.setLineDash(tr.kind === 'taxi' ? [10, 6] : [2, 5]);
+        ctx.setLineDash(tr.kind === 'taxi' ? [10, 6] : tr.kind === 'clear' ? [14, 4] : [2, 5]);
         ctx.beginPath(); ctx.arc(p.x, p.y, R, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
         ctx.globalAlpha = alpha * 0.08; ctx.fill(); ctx.globalAlpha = alpha;
         if (tr.kind === 'ping') for (let k = 1; k <= 3; k++) { ctx.globalAlpha = alpha * 0.5 * (1 - ((t * 0.4 + k / 3) % 1)); ctx.beginPath(); ctx.arc(p.x, p.y, R * ((t * 0.4 + k / 3) % 1), 0, Math.PI * 2); ctx.stroke(); }
         ctx.globalAlpha = alpha;
-        label(ctx, `R${tr.round} ${tr.kind === 'ping' ? 'FUNKZELLE' : 'TAXI'}`, p.x, p.y - R - 9, col);
+        label(ctx, `R${tr.round} ${tr.kind === 'ping' ? 'FUNKZELLE' : tr.kind === 'clear' ? 'HUBSCHRAUBER: NEGATIV' : 'TAXI'}`, p.x, p.y - R - 9, col);
       } else {
-        const icon = { start: '✕', cctv: '◉', metrocard: 'M', sighting: '!', item: '◆', ping: '', taxi: '' }[tr.kind];
+        const icon = { start: '✕', cctv: '◉', metrocard: 'M', sighting: '!', item: '◆', ping: '', taxi: '', bike: 'B', heli: 'H', clear: '' }[tr.kind];
         if (tr.kind === 'sighting') { const k = (t % 1.5) / 1.5; ctx.globalAlpha = alpha * (1 - k); ctx.beginPath(); ctx.arc(p.x, p.y, 10 + k * 22, 0, Math.PI * 2); ctx.stroke(); ctx.globalAlpha = alpha; }
         ctx.fillStyle = '#05101c'; ctx.beginPath(); ctx.arc(p.x, p.y, 10, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
         ctx.fillStyle = col; ctx.font = 'bold 11px "JetBrains Mono", monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(icon, p.x, p.y + 0.5);
-        label(ctx, tr.kind === 'start' ? (tr.tag ?? 'START') : 'R' + tr.round, p.x + 20, p.y - 12, col);
+        const fakeTag = tr.fake && viewer !== 'detective' ? ' FALSCHE FÄHRTE' : '';
+        label(ctx, (tr.kind === 'start' ? (tr.tag ?? 'START') : 'R' + tr.round) + fakeTag, p.x + 20 + fakeTag.length * 3, p.y - 12, col);
       }
       ctx.restore();
+    }
+  }
+
+  private drawActions(t: number) {
+    const g = this.game, ctx = this.ctx;
+    // Hinterhalt: mögliche Ziele
+    const target = g.ambushTarget();
+    const amb = g.chapter.ambush;
+    if (amb) for (const n of g.ambushCandidates()) {
+      const nd = g.graph.nodes[n]; const p = this.toScreen(nd.x, nd.y);
+      const own = this.cb.viewer() !== 'detective' && n === target;
+      ctx.save(); ctx.strokeStyle = own ? '#fb923c' : '#c084fc'; ctx.lineWidth = 2; ctx.setLineDash([4, 3]);
+      ctx.beginPath(); ctx.arc(p.x, p.y, 17 + Math.sin(t * 3) * 2, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
+      label(ctx, own ? 'DEIN ZIEL' : `MÖGLICHES ZIEL · AB R${amb.fromRound}`, p.x, p.y - 26, own ? '#fb923c' : '#c084fc');
+      ctx.restore();
+    }
+    // Straßensperren
+    for (const r of g.activeRoadblocks()) {
+      const nd = g.graph.nodes[r.node]; const p = this.toScreen(nd.x, nd.y);
+      ctx.save(); ctx.fillStyle = '#05101c'; ctx.strokeStyle = '#f59e0b'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.rect(p.x - 14, p.y + 8, 28, 9); ctx.fill(); ctx.stroke();
+      for (let i = 0; i < 3; i++) { ctx.fillStyle = '#f59e0b'; ctx.fillRect(p.x - 12 + i * 9, p.y + 9, 4, 7); }
+      ctx.restore();
+    }
+    // Observationen
+    for (const n of g.observed) {
+      const nd = g.graph.nodes[n]; const p = this.toScreen(nd.x, nd.y);
+      ctx.save(); ctx.strokeStyle = '#22d3ee'; ctx.lineWidth = 1.5; ctx.globalAlpha = 0.6 + 0.4 * Math.sin(t * 2);
+      ctx.beginPath(); ctx.ellipse(p.x, p.y - 16, 9, 5, 0, 0, Math.PI * 2); ctx.stroke();
+      ctx.beginPath(); ctx.arc(p.x, p.y - 16, 2.5, 0, Math.PI * 2); ctx.fillStyle = '#22d3ee'; ctx.fill();
+      ctx.restore();
+    }
+    // Vorschau Hubschrauber-Radius
+    if (this.tool === 'heli' && this.mouse.inside && this.cb.viewer() === 'detective') {
+      ctx.save(); ctx.strokeStyle = '#4ade80'; ctx.setLineDash([6, 4]); ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(this.mouse.x, this.mouse.y, HELI_RADIUS * this.scale, 0, Math.PI * 2); ctx.stroke(); ctx.restore();
     }
   }
 
@@ -477,7 +527,7 @@ export class MapView {
       const q = this.toScreen(g.graph.nodes[n].x, g.graph.nodes[n].y);
       const modes = new Set(os.map((o) => o.mode));
       let rr = 9;
-      for (const m of ['foot', 'subway', 'taxi'] as const) if (modes.has(m)) { ctx.strokeStyle = m === 'foot' ? '#e2e8f0' : m === 'subway' ? '#facc15' : '#f97316'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(q.x, q.y, rr, 0, Math.PI * 2); ctx.stroke(); rr += 4; }
+      for (const m of ['foot', 'bike', 'subway', 'taxi'] as const) if (modes.has(m)) { ctx.strokeStyle = m === 'foot' ? '#e2e8f0' : m === 'bike' ? '#34d399' : m === 'subway' ? '#facc15' : '#f97316'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(q.x, q.y, rr, 0, Math.PI * 2); ctx.stroke(); rr += 4; }
     }
   }
 
@@ -529,7 +579,7 @@ export class MapView {
 }
 
 function traceColor(t: Trace) {
-  return { start: '#ef4444', cctv: '#f87171', metrocard: '#facc15', taxi: '#f59e0b', ping: '#22d3ee', sighting: '#ef4444', item: '#e879f9' }[t.kind];
+  return { start: '#ef4444', cctv: '#f87171', metrocard: '#facc15', taxi: '#f59e0b', ping: '#22d3ee', sighting: '#ef4444', item: '#e879f9', bike: '#34d399', heli: '#4ade80', clear: '#4ade80' }[t.kind];
 }
 function label(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, color: string) {
   ctx.font = '600 10px "JetBrains Mono", ui-monospace, monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
