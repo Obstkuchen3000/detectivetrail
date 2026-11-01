@@ -9,6 +9,8 @@ import { ACTION_COST, Game, type AiLevel, type GameMode, type GameOptions } from
 import { computeScore, recordBest } from './game/score';
 import { nextHint } from './game/hints';
 import { Coach } from './ui/coach';
+import { RaidView } from './ui/raid';
+import { ROOM_ICON } from './game/building';
 import type { CityMap, MoveOption, Trace } from './game/types';
 import { MapView, routeColor, type Tool, type Viewer } from './map/MapView';
 import { askText, fill, h, modal, toast } from './ui/dom';
@@ -240,6 +242,8 @@ function rules() {
       h('li', {}, '👁 Observation (1 EP): Der Knoten wird dauerhaft überwacht. Betritt der Flüchtige ihn, gibt es sicher eine Meldung.'),
       h('li', {}, '🚁 Hubschrauber (2 EP): Ein Wärmebild im Radius von 500 m zeigt den Flüchtigen genau, oder dass er nicht dort ist.'),
     ),
+    h('h4', {}, 'Gebäude: Verschanzen & Durchsuchen'),
+    h('p', {}, 'Flüchtige können sich in einem Gebäude am aktuellen Knoten verschanzen. Dann erfassen sie weder Kameras noch Funkzelle noch Hubschrauber, aber sie sitzen fest. Mit Haftbefehl kann eine Einheit vor Ort das Gebäude durchsuchen (🏢 neben der Einheit, 1 EP). Eine Durchsuchung hat 4 Durchgänge mit je 3 Aktionen: einen Raum durchsuchen (im Raumbild die versteckte Person finden, 25 Sekunden), eine Etage abriegeln, einen Ausgang sichern oder Personal befragen. Nach jedem Durchgang wechselt die Zielperson vielleicht den Raum, und an einem ungesicherten Ausgang kann sie entkommen.'),
     h('h4', {}, 'Verhöre & Lügen'),
     h('p', {}, 'Manche Personen lügen. Wenn eine Aussage nicht zu Ihren Beweisen passt, befragen Sie die Person vor Ort und legen das passende Beweisstück vor. Ein falsches Beweisstück kostet Wertung.'),
     h('h4', {}, 'Hinterhalt'),
@@ -256,6 +260,7 @@ function startGame(game: Game) {
   destroyCurrent?.(); destroyCurrent = null;
   const map = game.map, def = game.def;
   game.sfx = play;
+  if (import.meta.env.DEV) (window as unknown as { __game: Game }).__game = game;
   let view: 'map' | 'board' | 'talk' = 'map';
   let reveal = false;
   const viewer = (): Viewer => (game.phase === 'over' ? (reveal || game.mode === 'fugitive' ? 'reveal' : 'detective') : game.mode === 'fugitive' || (game.mode === 'hotseat' && game.phase === 'fugitive') ? 'fugitive' : 'detective');
@@ -274,8 +279,9 @@ function startGame(game: Game) {
   const talk = new InterrogationRoom(game, (place) => {
     const n = game.graph.nodes[game.graph.placeIndex.get(place)!]; switchView('map'); mv.focus(n.x, n.y, Math.max(mv.scale, 0.6));
   });
+  const raidView = new RaidView(game);
   const overlay = h('div', { class: 'overlay-host' });
-  fill(app, h('div', { class: 'game' }, top, h('main', {}, mapView, pin.el, talk.el), overlay, coach?.el ?? null));
+  fill(app, h('div', { class: 'game' }, top, h('main', {}, mapView, pin.el, talk.el, raidView.el), overlay, coach?.el ?? null));
 
   const mv = new MapView(mapHost, map, game, {
     viewer,
@@ -295,12 +301,25 @@ function startGame(game: Game) {
   function chooseFugitiveMove(opts: MoveOption[]) {
     const n = game.graph.nodes[opts[0].to];
     const exits = game.escapeNodes();
-    const desc: Record<string, string> = { bike: '🚲 Leihrad (zwei Schritte): Die Ausleihstation wird bekannt.', foot: '🚶 Zu Fuß: Kameras können dich erfassen.', subway: '🚇 U-Bahn: Einstieg und Linie werden bekannt.', taxi: '🚕 Taxi: Das Ziel ist ungefähr bekannt. Es bleiben ' + game.fugitive.taxis + ' Fahrten.', stay: '⏸ Abtauchen' };
+    const desc: Record<string, string> = { hide: game.fugitive.hidden ? '🏢 Im Versteck bleiben (Raum wählen)' : `🏢 Im ${game.buildingAt(opts[0].to).name} verschanzen: keine Kameras, kein Funk, aber du sitzt fest`, bike: '🚲 Leihrad (zwei Schritte): Die Ausleihstation wird bekannt.', foot: '🚶 Zu Fuß: Kameras können dich erfassen.', subway: '🚇 U-Bahn: Einstieg und Linie werden bekannt.', taxi: '🚕 Taxi: Das Ziel ist ungefähr bekannt. Es bleiben ' + game.fugitive.taxis + ' Fahrten.', stay: '⏸ Abtauchen' };
     const close = modal(h('div', { class: 'ask' },
       h('h3', {}, 'Nach ' + n.name + (n.camera ? ' 📹' : '') + (exits.includes(opts[0].to) ? ' ⇲' : '')),
       game.ambushTarget() === opts[0].to && game.chapter.ambush ? h('p', { class: 'hint' }, game.round >= game.chapter.ambush.fromRound ? 'Dein Ziel! Wenn dort niemand wartet, gelingt der Coup.' : `Dein Ziel, aber erst ab Runde ${game.chapter.ambush.fromRound}. Wenn dort jetzt schon Polizei wartet, bist du dran.`) : null,
       exits.includes(opts[0].to) && game.chapter.escape ? h('p', { class: 'hint' }, game.round >= game.chapter.escape.fromRound ? 'Der Fluchtpunkt ist offen. Damit entkommst du!' : `Der Fluchtpunkt öffnet erst ab Runde ${game.chapter.escape.fromRound}.`) : null,
-      ...opts.map((o) => h('button', { class: 'btn wide', onclick: () => { close(); game.applyFugitiveMove(o); } }, desc[o.mode] + (o.route ? ` (Linie ${o.route})` : ''))),
+      ...opts.map((o) => h('button', { class: 'btn wide', onclick: () => { close(); if (o.mode === 'hide') chooseHideRoom(); else game.applyFugitiveMove(o); } }, desc[o.mode] + (o.route ? ` (Linie ${o.route})` : ''))),
+      h('button', { class: 'btn ghost', onclick: () => close() }, 'Abbrechen'),
+    ));
+  }
+
+  function chooseHideRoom() {
+    const b = game.buildingAt(game.fugitive.node);
+    const cur = game.fugitive.hidden?.room;
+    const close = modal(h('div', { class: 'ask' },
+      h('h3', {}, `🏢 ${b.name}: Versteck wählen`),
+      h('p', { class: 'hint' }, 'Wenn die Polizei das Gebäude stürmt, durchsucht sie Raum für Raum. Ausgänge (🚪) bieten eine Chance zur Flucht, sind aber naheliegend. Oben ist es ruhiger, aber der Weg nach draußen ist weiter.'),
+      h('div', { class: 'hide-grid' }, ...Array.from({ length: b.floors }, (_, i) => b.floors - 1 - i).map((f) => h('div', { class: 'row wrap' },
+        h('b', { class: 'fl' }, f === 0 ? 'EG' : `${f}. OG`),
+        ...b.rooms.filter((r) => r.floor === f && r.kind !== 'treppe').map((r) => h('button', { class: 'chip' + (r.id === cur ? ' on' : ''), onclick: () => { close(); game.applyFugitiveMove({ to: game.fugitive.node, mode: 'hide', room: r.id }); } }, `${ROOM_ICON[r.kind]} ${r.name}${r.exit ? ' 🚪' : ''}`))))),
       h('button', { class: 'btn ghost', onclick: () => close() }, 'Abbrechen'),
     ));
   }
@@ -336,7 +355,7 @@ function startGame(game: Game) {
     );
   }
 
-  function traceIcon(t: Trace) { return { start: '✕', cctv: '📹', metrocard: '🚇', taxi: '🚕', ping: '📶', sighting: '👁', item: '◆', bike: '🚲', heli: '🚁', clear: '🚁' }[t.kind]; }
+  function traceIcon(t: Trace) { return { start: '✕', cctv: '📹', metrocard: '🚇', taxi: '🚕', ping: '📶', sighting: '👁', item: '◆', bike: '🚲', heli: '🚁', clear: '🚁', building: '🏢' }[t.kind]; }
 
   function renderTimeline() {
     if (game.phase === 'chapter-intro' || game.round < 2) { fill(timeline); timeline.style.display = 'none'; return; }
@@ -381,13 +400,15 @@ function startGame(game: Game) {
           h('p', { class: game.warrant ? 'warnline' : '' }, game.warrant ? '⚠️ Es gibt einen Haftbefehl gegen dich. Jede Einheit kann dich festnehmen, und die Kameras erkennen dich öfter.' : 'Noch kennt die Polizei deinen Namen nicht.'),
           game.fugitive.movesLeft > 1 ? h('p', { class: 'warnline' }, `Vorsprung: noch ${game.fugitive.movesLeft} Züge`) : null,
           h('div', { class: 'legend' }, h('span', { class: 'lg foot' }, 'zu Fuß'), h('span', { class: 'lg bike' }, 'Rad'), h('span', { class: 'lg sub' }, 'U-Bahn'), h('span', { class: 'lg taxi' }, 'Taxi')),
+          game.fugitive.hidden ? h('p', { class: 'okline' }, `🏢 Verschanzt in ${game.buildingAt(game.fugitive.hidden.node).name}, ${game.buildingAt(game.fugitive.hidden.node).rooms[game.fugitive.hidden.room].name} (seit ${game.fugitive.hidden.rounds + 1} Runde(n)). Klicke auf einen Knoten, um das Gebäude zu verlassen.`) : null,
+          game.phase === 'fugitive' ? h('button', { class: 'btn wide', onclick: () => chooseHideRoom() }, game.fugitive.hidden ? '🏢 Im Versteck bleiben / Raum wechseln' : `🏢 Im Gebäude verschanzen`) : null,
           game.fugitive.disguise > 0 ? h('p', { class: 'okline' }, `🎭 Verkleidet: noch ${game.fugitive.disguise} Runde(n) unerkannt`) : null,
           game.fugitive.decoyArmed ? h('p', { class: 'okline' }, '🧭 Die falsche Fährte wird bei deinem nächsten Zug gelegt.') : null,
           game.phase === 'fugitive' && (game.fugitive.gadgets.disguise > 0 || game.fugitive.gadgets.decoy > 0) ? h('div', { class: 'row wrap' },
             game.fugitive.gadgets.disguise > 0 ? h('button', { class: 'btn small', onclick: () => game.useDisguise() }, `🎭 Verkleidung (${game.fugitive.gadgets.disguise}×)`) : null,
             game.fugitive.gadgets.decoy > 0 && !game.fugitive.decoyArmed ? h('button', { class: 'btn small', onclick: () => game.armDecoy() }, `🧭 Falsche Fährte (${game.fugitive.gadgets.decoy}×)`) : null) : null,
           h('p', { class: 'hint' }, 'Klicke auf einen markierten Knoten. Rote Punkte sind Kameras.'),
-          game.phase === 'fugitive' ? h('button', { class: 'btn wide', onclick: () => game.applyFugitiveMove({ to: game.fugitive.node, mode: 'stay' }) }, '⏸ Abtauchen (bleiben, keine Spur)') : null,
+          game.phase === 'fugitive' && !game.fugitive.hidden ? h('button', { class: 'btn wide', onclick: () => game.applyFugitiveMove({ to: game.fugitive.node, mode: 'stay' }) }, '⏸ Abtauchen (bleiben, keine Spur)') : null,
         ),
         traceList(true),
         game.mode === 'fugitive' ? h('div', { class: 'panel log' }, h('h3', {}, 'Polizeifunk (abgehört)'), ...game.log.slice(0, 6).map((l) => h('div', { class: 'logline ' + (l.kind ?? '') }, h('span', {}, 'R' + l.round), ' ' + l.text))) : null,
@@ -401,7 +422,9 @@ function startGame(game: Game) {
         ...game.units.map((u, i) => h('button', { class: 'unit-row' + (mv.selectedUnit === i ? ' on' : '') + (u.moved ? ' moved' : ''), onclick: () => { const n = game.graph.nodes[u.node]; mv.tool = 'select'; mv.selectedUnit = u.moved ? null : i; mv.focus(n.x, n.y); render(); } },
           h('span', { class: 'ubadge', style: { borderColor: u.color, color: u.color } }, u.short),
           h('span', { class: 'grow' }, h('b', {}, u.name), h('small', {}, game.graph.nodes[u.node].name)),
-          h('small', {}, u.moved ? 'gefahren' : 'bereit'))),
+          h('small', {}, u.moved ? 'gefahren' : 'bereit'),
+          game.canRaid(u.node) ? h('span', { class: 'raid-btn', title: `Gebäude durchsuchen (${ACTION_COST.raid} EP)`, onclick: (e: Event) => { e.stopPropagation(); game.startRaid(u.node); } }, '🏢') : null)),
+        game.warrant && game.phase === 'detective' ? h('p', { class: 'hint' }, '🏢 neben einer Einheit: das Gebäude an ihrem Standort durchsuchen (1 EP). Verschanzte Flüchtige findet man nur so.') : null,
       ),
       traceList(false),
       h('div', { class: 'panel log' }, h('h3', {}, 'Funkprotokoll'), ...game.log.slice(0, 7).map((l) => h('div', { class: 'logline ' + (l.kind ?? '') }, h('span', {}, 'R' + l.round), ' ' + l.text))),
@@ -451,7 +474,7 @@ function startGame(game: Game) {
         h('button', { class: view === 'talk' ? 'on' : '', onclick: () => switchView('talk') }, '🎙 Verhöre', openQ ? h('span', { class: 'badge dim' }, String(openQ)) : null),
       ) : h('nav', { class: 'tabs' }, h('span', { class: 'fug-label' }, '🦊 ' + (game.phase === 'fugitive' ? 'Dein Zug' : 'Flucht'))),
       h('div', { class: 'grow' }),
-      det && game.phase === 'detective' ? h('button', { class: 'btn end', onclick: () => { mv.selectedUnit = null; game.endDetectiveTurn(); } }, 'Runde beenden ▶') : null,
+      det && game.phase === 'detective' && !game.raid ? h('button', { class: 'btn end', onclick: () => { mv.selectedUnit = null; game.endDetectiveTurn(); } }, 'Runde beenden ▶') : null,
       det && game.phase === 'detective' ? h('button', { class: 'btn ghost small', title: 'Tipp (kostet 40 Punkte)', onclick: showHint }, '💡') : null,
       h('button', { class: 'btn ghost small', title: 'Speichern', onclick: saveDialog }, '💾'),
       muteBtn(),
@@ -521,9 +544,12 @@ function startGame(game: Game) {
 
   function render() {
     if (viewer() !== 'detective' && view !== 'map') view = 'map';
-    mapView.classList.toggle('active', view === 'map');
-    pin.el.classList.toggle('active', view === 'board');
-    talk.el.classList.toggle('active', view === 'talk');
+    const raiding = !!game.raid && viewer() === 'detective';
+    mapView.classList.toggle('active', view === 'map' && !raiding);
+    pin.el.classList.toggle('active', view === 'board' && !raiding);
+    talk.el.classList.toggle('active', view === 'talk' && !raiding);
+    raidView.el.classList.toggle('active', raiding);
+    raidView.render();
     renderTop(); renderTools(); renderSide(); renderOverlay(); renderTimeline();
     coach?.update({ game, view, scale: mv.scale });
     if (view === 'board') pin.render();

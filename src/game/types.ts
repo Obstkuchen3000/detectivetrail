@@ -23,10 +23,10 @@ export interface GNode {
   camera: boolean;
 }
 
-export type MoveMode = 'foot' | 'bike' | 'subway' | 'taxi' | 'stay';
-export interface MoveOption { to: number; mode: MoveMode; route?: string }
+export type MoveMode = 'foot' | 'bike' | 'subway' | 'taxi' | 'stay' | 'hide';
+export interface MoveOption { to: number; mode: MoveMode; route?: string; /** Versteck-Raum beim Verschanzen */ room?: number }
 
-export type TraceKind = 'start' | 'cctv' | 'metrocard' | 'taxi' | 'ping' | 'sighting' | 'item' | 'bike' | 'heli' | 'clear';
+export type TraceKind = 'start' | 'cctv' | 'metrocard' | 'taxi' | 'ping' | 'sighting' | 'item' | 'bike' | 'heli' | 'clear' | 'building';
 export interface Trace {
   id: number;
   round: number;
@@ -73,5 +73,14 @@ export interface HiddenItem {
 export interface BoardCard { id: string; x: number; y: number; isNew: boolean }
 
 export interface Unit { id: string; name: string; short: string; color: string; node: number; moved: boolean }
+
+export interface HiddenState { node: number; room: number; rounds: number; trail: { room: number; turn: number }[] }
+export interface RaidState {
+  node: number; turn: number; maxTurns: number; actions: number;
+  searched: { room: number; turn: number; result: 'leer' | 'spuren' }[];
+  sealed: number[]; guarded: number[]; asked: string[]; log: string[];
+  open: number | null; openedAt: number; clues: number[];
+  ended: null | 'caught' | 'escaped' | 'failed' | 'aborted';
+}
 
 export interface LogEntry { round: number; text: string; kind?: 'info' | 'good' | 'bad' }

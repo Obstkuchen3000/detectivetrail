@@ -33,6 +33,7 @@ export function validateCase(def: CaseDef): string[] {
     if (!ch.candidates.includes(ch.culprit)) errs.push(`${w}: Der Täter steht nicht unter den Kandidaten.`);
     if (ch.ambush && !ch.ambush.candidates.includes(ch.ambush.target)) errs.push(`${w}: Das Hinterhalt-Ziel steht nicht unter den möglichen Zielen.`);
   });
+  for (const k of Object.keys(def.buildings ?? {})) place(k, 'Gebäude');
   const produced = new Set<string>();
   def.chapters.forEach((ch) => { ch.startCards.forEach((c) => produced.add(c)); ch.sceneItems.forEach((s) => produced.add(s.cardId)); ch.timed.forEach((t) => produced.add(t.card)); });
   def.contacts.forEach((c) => c.questions.forEach((q) => { q.gives?.forEach((g) => produced.add(g)); q.contradiction?.gives?.forEach((g) => produced.add(g)); }));

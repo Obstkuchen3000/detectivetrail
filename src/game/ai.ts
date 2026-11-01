@@ -39,6 +39,13 @@ export function aiChooseMove(g: Game): MoveOption {
     if (o.mode === 'subway') s -= 4 + (hereThreat <= 1 ? -6 : 0);
     if (o.mode === 'taxi') s -= g.fugitive.taxis <= 1 ? 12 : 6 - (hereThreat <= 1 ? 6 : 0);
     if (o.mode === 'bike') s -= 3 + (hereThreat <= 1 ? -4 : 0);
+    if (o.mode === 'hide') {
+      const h = g.fugitive.hidden;
+      s += (hereThreat <= 1 ? 10 : -8) + (recentlySeen ? 6 : 0) + (g.warrant ? 3 : 0) - (h ? h.rounds * 6 : 0);
+      if (ex && g.round >= ex.fromRound - 1) s -= 30;
+      if (amb) s -= 25;
+      if (lvl === 'leicht') s -= 5;
+    }
     if (o.mode === 'stay') s += recentlySeen ? -8 : 2;
     if (visited.has(o.to)) s -= 3;
     if (known) s += Math.min(dist(n.x, n.y, known.x, known.y), 3000) / 400;
